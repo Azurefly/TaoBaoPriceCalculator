@@ -1,0 +1,121 @@
+{
+  "schema_version": 2,
+  "name": "历史订单复盘 · 缺少结算证据，不输出最优金额",
+  "items": [
+    {
+      "id": "h01",
+      "title": "虚构商品 01",
+      "display_price_cents": 10000,
+      "display_price_kind": "estimated_total",
+      "deposit_paid_cents": 1000
+    },
+    {
+      "id": "h02",
+      "title": "虚构商品 02",
+      "display_price_cents": 11000,
+      "display_price_kind": "estimated_total",
+      "deposit_paid_cents": 1000
+    },
+    {
+      "id": "h03",
+      "title": "虚构商品 03",
+      "display_price_cents": 12000,
+      "display_price_kind": "estimated_total",
+      "deposit_paid_cents": 1000
+    },
+    {
+      "id": "h04",
+      "title": "虚构商品 04",
+      "display_price_cents": 13000,
+      "display_price_kind": "estimated_total",
+      "deposit_paid_cents": 1000
+    },
+    {
+      "id": "h05",
+      "title": "虚构商品 05",
+      "display_price_cents": 14000,
+      "display_price_kind": "estimated_total",
+      "deposit_paid_cents": 1000
+    },
+    {
+      "id": "h06",
+      "title": "虚构商品 06",
+      "display_price_cents": 15000,
+      "display_price_kind": "estimated_total",
+      "deposit_paid_cents": 1000
+    },
+    {
+      "id": "h07",
+      "title": "虚构商品 07",
+      "display_price_cents": 16000,
+      "display_price_kind": "estimated_total",
+      "deposit_paid_cents": 1000
+    },
+    {
+      "id": "h08",
+      "title": "虚构商品 08",
+      "display_price_cents": 17000,
+      "display_price_kind": "estimated_total",
+      "deposit_paid_cents": 1000
+    },
+    {
+      "id": "h09",
+      "title": "虚构商品 09",
+      "display_price_cents": 18000,
+      "display_price_kind": "estimated_total",
+      "deposit_paid_cents": 1000
+    },
+    {
+      "id": "h10",
+      "title": "虚构商品 10",
+      "display_price_cents": 19000,
+      "display_price_kind": "estimated_total",
+      "deposit_paid_cents": 1000
+    },
+    {
+      "id": "h11",
+      "title": "虚构商品 11",
+      "display_price_cents": 20000,
+      "display_price_kind": "estimated_total",
+      "deposit_paid_cents": 1000
+    },
+    {
+      "id": "h12",
+      "title": "虚构商品 12",
+      "display_price_cents": 21000,
+      "display_price_kind": "estimated_total",
+      "deposit_paid_cents": 1000
+    },
+    {
+      "id": "h13",
+      "title": "虚构商品 13",
+      "display_price_cents": 22000,
+      "display_price_kind": "estimated_total",
+      "deposit_paid_cents": 1000
+    },
+    {
+      "id": "h14",
+      "title": "虚构商品 14",
+      "display_price_cents": 23000,
+      "display_price_kind": "estimated_total",
+      "deposit_paid_cents": 1000
+    },
+    {
+      "id": "h15",
+      "title": "虚构商品 15",
+      "display_price_cents": 1000,
+      "display_price_kind": "unknown",
+      "deposit_paid_cents": 1000
+    },
+    {
+      "id": "h16",
+      "title": "虚构商品 16",
+      "display_price_cents": 1000,
+      "display_price_kind": "unknown",
+      "deposit_paid_cents": 1000
+    }
+  ],
+  "audit_notes": [
+    "完全虚构的复盘测试数据，不含个人订单、品牌、券包。缺少计价基数时不得从展示价再次扣券。"
+  ]
+}

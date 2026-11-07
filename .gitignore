@@ -9,3 +9,4 @@ __pycache__/
 browser-profile/
 *.log
 .DS_Store
+test-artifacts/

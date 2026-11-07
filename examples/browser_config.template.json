@@ -1,0 +1,19 @@
+{
+  "cart_url": "https://cart.taobao.com/cart.htm",
+  "rows": "",
+  "row_id_attribute": "data-id",
+  "title": "",
+  "sku": "",
+  "quantity": "",
+  "display_price": "",
+  "checkbox": "input[type=\"checkbox\"]",
+  "checkout_button": "",
+  "checkout_total": "",
+  "checkout_rows": "",
+  "checkout_row_id_attribute": "data-id",
+  "checkout_quantity": "",
+  "cart_complete_marker": "",
+  "selectors_calibrated": false,
+  "auto_trials_enabled": false,
+  "trial_delay_seconds": 10
+}

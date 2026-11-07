@@ -1,0 +1,109 @@
+{
+  "researched_at": "2026-11-07",
+  "sources": [
+    {
+      "id": "S01",
+      "title": "预售协议",
+      "url": "https://terms.alicdn.com/legal-agreement/terms/suit_bu1_tmall/suit_bu1_tmall202203151048_70887.html",
+      "scope": "版本更新2026-09-20",
+      "used_for": "预售价格、券后价、定金尾款、合并及权益变动"
+    },
+    {
+      "id": "S02",
+      "title": "淘宝客商品资料接口 apiId=62191",
+      "url": "https://developer.alibaba.com/docs/api.htm?apiId=62191",
+      "scope": "检索时公开API文档；不是个人结算API",
+      "used_for": "reserve_price、zk_final_price、final_promotion_price及优惠路径"
+    },
+    {
+      "id": "S03",
+      "title": "海外淘宝客物料精选正式版 apiId=72812",
+      "url": "https://developer.alibaba.com/docs/api.htm?apiId=72812",
+      "scope": "检索时公开API文档；特定API类目",
+      "used_for": "预估凑单价及条件说明，不能直接视为个人优惠结果"
+    },
+    {
+      "id": "S04",
+      "title": "26年双11超级红包消费者规则",
+      "url": "https://1111.alimama.com/alimamamain/page_20211227_144813",
+      "scope": "只适用该活动；页面可动态更新",
+      "used_for": "红包范围、叠加、失效、退款及行为规范"
+    },
+    {
+      "id": "S05",
+      "title": "支付宝端天猫618限时红包活动规则",
+      "url": "https://render.alipay.com/p/c/180020570000131650/index.html?caprMode=sync",
+      "scope": "特定活动历史样本；不外推当前全部618规则",
+      "used_for": "先消费后给券、限时、渠道、券后门槛、退款失效"
+    },
+    {
+      "id": "S06",
+      "title": "有价优惠券购买规则",
+      "url": "https://terms.alicdn.com/legal-agreement/terms/c_platform_service_agreement/20240131203313249/20240131203313249.html",
+      "scope": "仅有价券范畴",
+      "used_for": "券范围、展示路径、赠品及退款"
+    },
+    {
+      "id": "S07",
+      "title": "2023年天猫88会员节消电惊喜券招商要求",
+      "url": "https://terms.alicdn.com/legal-agreement/terms/b_platform_service_agreement/20230727104126591/20230727104126591.html",
+      "scope": "2023历史活动例子；非全平台通用",
+      "used_for": "门槛基数、重叠商品互斥与不同活动口径"
+    },
+    {
+      "id": "S08",
+      "title": "88VIP月卡会员服务协议",
+      "url": "https://terms.alicdn.com/legal-agreement/terms/c_end_product_protocol/20240416200804843/20240416200804843.html",
+      "scope": "月卡协议；权益以具体规则为准",
+      "used_for": "权益各自效期/条件、本人使用与账号安全"
+    },
+    {
+      "id": "S09",
+      "title": "淘宝网法律声明",
+      "url": "https://terms.alicdn.com/legal-agreement/terms/suit_bu1_taobao/suit_bu1_taobao201811121436_80276.html",
+      "scope": "最新版本生效2026-10-07",
+      "used_for": "第三方自动化许可要求及不得规避安全校验"
+    },
+    {
+      "id": "S10",
+      "title": "淘宝网隐私政策",
+      "url": "https://terms.alicdn.com/legal-agreement/terms/suit_bu1_taobao/suit_bu1_taobao201703241622_61002.html",
+      "scope": "检索时可见文本",
+      "used_for": "账号、交易与权益数据的隐私处理背景"
+    },
+    {
+      "id": "S11",
+      "title": "Playwright Python BrowserType",
+      "url": "https://playwright.dev/python/docs/api/class-browsertype",
+      "scope": "官方技术文档",
+      "used_for": "独立persistent context、浏览器安装与channel"
+    },
+    {
+      "id": "S12",
+      "title": "Playwright Python Locators",
+      "url": "https://playwright.dev/python/docs/locators",
+      "scope": "官方技术文档",
+      "used_for": "页面定位、唯一性与自动等待"
+    }
+  ],
+  "engineering_sources_v02": [
+    {
+      "title": "FastAPI Concurrency and async / await",
+      "url": "https://fastapi.tiangolo.com/async/",
+      "checked_at": "2026-11-07",
+      "used_for": "工作线程与API并发边界"
+    },
+    {
+      "title": "Python os.replace and filesystem APIs",
+      "url": "https://docs.python.org/3/library/os.html",
+      "checked_at": "2026-11-07",
+      "used_for": "原子替换与本地持久化API"
+    },
+    {
+      "title": "Playwright Python Assertions",
+      "url": "https://playwright.dev/python/docs/test-assertions",
+      "checked_at": "2026-11-07",
+      "used_for": "页面自动等待和测试方式"
+    }
+  ]
+}
