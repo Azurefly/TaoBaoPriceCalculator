@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory(prefix='tbpc-packaged-') as temp:
     try:
         handshake = json.loads(lines.get(timeout=45))
         url = 'http://127.0.0.1:' + str(handshake['port'])
-        assert handshake['version'] == '0.3.0'
+        assert handshake['version'] == json.loads((root / 'desktop/package.json').read_text())['version']
         assert key in call('/')
         assert 'use strict' in call('/static/app.js')
         try:

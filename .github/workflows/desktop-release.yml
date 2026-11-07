@@ -8,6 +8,7 @@ on:
       - 'examples/**'
       - 'requirements*.txt'
       - 'scripts/check_packaged*.py'
+      - 'scripts/check_installers.py'
       - '.github/workflows/desktop-release.yml'
   workflow_dispatch:
 permissions:
@@ -69,11 +70,12 @@ jobs:
           path: desktop
       - name: Install Python build dependencies
         run: python -m pip install -r requirements-desktop.txt -r requirements-dev.txt
-      - name: Run core, API, desktop lifecycle and shell security tests
+      - name: Run core, API, desktop lifecycle and signing regression tests
         run: |
           python -m pytest -q
-          node --test desktop/tests.cjs
+          node --test desktop/tests.cjs desktop/tests-signing.cjs
           node --check desktop/main.cjs
+          node --check desktop/sign-backend.cjs
       - name: Freeze backend (includes Python and application dependencies)
         run: python -m PyInstaller --noconfirm --clean desktop/backend.spec
       - name: Test the frozen binary over real local HTTP
@@ -90,6 +92,26 @@ jobs:
       - name: Test packaged desktop window (Linux; sandbox stays enabled)
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum python scripts/check_packaged_desktop.py
+      - name: Download old Mac installer for signature regression evidence (not executed)
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release download v0.3.0 --pattern 'TaoBaoPriceCalculator-0.3.0-mac-${{ matrix.arch }}.dmg' --dir "$RUNNER_TEMP/tbpc-baseline"
+          echo "PROMOPATH_BASELINE_DMG=$RUNNER_TEMP/tbpc-baseline/TaoBaoPriceCalculator-0.3.0-mac-${{ matrix.arch }}.dmg" >> "$GITHUB_ENV"
+      - name: Test final installer (DMG copy/signature/Gatekeeper or NSIS install/runtime)
+        if: runner.os != 'Linux'
+        run: python scripts/check_installers.py
+      - name: Test extracted DEB and AppImage runtime
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum python scripts/check_installers.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-${{ matrix.target }}-${{ matrix.arch }}
+          path: release/installer-validation-*.json
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.target }}-${{ matrix.arch }}
@@ -98,6 +120,7 @@ jobs:
             release/*.dmg
             release/*.AppImage
             release/*.deb
+            release/installer-validation-*.json
           if-no-files-found: error
           retention-days: 30
   publish:
@@ -118,23 +141,27 @@ jobs:
         with:
           name: desktop-dependency-lock
           path: release-assets
-      - name: Verify completeness and create checksums
+      - name: Verify completeness, validation reports and checksums
         shell: python
         run: |
           import hashlib, json, os
           from pathlib import Path
           root=Path('release-assets')
-          files=sorted(p for p in root.iterdir() if p.is_file())
           assert len(list(root.glob('*.exe')))==1
           assert len(list(root.glob('*.dmg')))==2
           assert len(list(root.glob('*.AppImage')))==1
           assert len(list(root.glob('*.deb')))==1
+          reports=list(root.glob('installer-validation-*.json'))
+          assert len(reports)==4
+          assert all(json.loads(p.read_text())['passed'] for p in reports)
+          files=sorted(p for p in root.iterdir() if p.is_file())
           manifest={'commit':os.environ['GITHUB_SHA'],'version':json.loads(Path('desktop/package.json').read_text())['version'],
-                    'publisher_signed':False,'files':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in files}}
+                    'publisher_signed':False,'mac_ad_hoc_signed':True,'apple_notarized':False,
+                    'files':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in files}}
           (root/'build-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
           files=sorted(p for p in root.iterdir() if p.is_file())
           (root/'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in files))
-      - name: Publish complete preview release (never overwrite an existing version)
+      - name: Publish validated preview release (never overwrite an existing version)
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -142,14 +169,25 @@ jobs:
           set -euo pipefail
           HEAD=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
           if [ "$HEAD" != "$GITHUB_SHA" ]; then
-            echo "A newer main commit exists; refusing to publish stale build." >> "$GITHUB_STEP_SUMMARY"
+            echo "Newer main exists; refusing stale publication." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           VERSION=$(node -p "require('./desktop/package.json').version")
           if gh release view "v$VERSION" >/dev/null 2>&1; then
-            echo "Version v$VERSION already exists; left unchanged." >> "$GITHUB_STEP_SUMMARY"
+            echo "Version already exists; left unchanged." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           gh release create "v$VERSION" release-assets/* --target "$GITHUB_SHA" \
-            --title "TaoBaoPriceCalculator v$VERSION · 多端桌面预览版" \
+            --title "TaoBaoPriceCalculator v$VERSION · Mac签名修复预览版" \
             --notes-file docs/desktop-release.md --prerelease
+          gh release view v0.3.0 --json body --jq '.body' > "$RUNNER_TEMP/old-release.md"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path(os.environ['RUNNER_TEMP'])/'old-release.md'
+          old=p.read_text()
+          warning='> **Mac 安装问题：v0.3.0 已报告“应用已损坏”。请改用 v0.3.1；新版修复签名完整性，但仍未做 Apple 公证，不保证免安全提示。**\n\n'
+          if not old.startswith(warning):
+              p.write_text(warning+old)
+          PY
+          gh release edit v0.3.0 --notes-file "$RUNNER_TEMP/old-release.md"

@@ -1,7 +1,7 @@
 {
   "name": "taobao-price-calculator",
   "productName": "TaoBaoPriceCalculator",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Local promotion payment-path calculator / 本地优惠付款路径计算器",
   "author": "Azurefly",
   "private": true,
@@ -9,34 +9,35 @@
   "homepage": "https://github.com/Azurefly/TaoBaoPriceCalculator",
   "scripts": {
     "start": "electron .",
-    "test": "node --test tests.cjs",
+    "test": "node --test tests*.cjs",
     "dist": "electron-builder --publish never"
   },
-  "devDependencies": {
-    "electron": "45.2.3",
-    "electron-builder": "26.18.0"
-  },
+  "devDependencies": {"electron": "45.2.3", "electron-builder": "26.18.0"},
   "build": {
     "appId": "io.github.azurefly.taobaopricecalculator",
     "productName": "TaoBaoPriceCalculator",
     "artifactName": "TaoBaoPriceCalculator-${version}-${os}-${arch}.${ext}",
-    "directories": { "output": "../release" },
+    "directories": {"output": "../release"},
     "files": ["main.cjs", "security.cjs", "package.json"],
-    "extraResources": [
-      { "from": "../dist/TaoBaoPriceCalculator-service", "to": "backend" }
-    ],
+    "extraResources": [{"from": "../dist/TaoBaoPriceCalculator-service", "to": "backend"}],
     "asar": true,
     "npmRebuild": false,
-    "win": { "target": ["nsis"], "signAndEditExecutable": false },
+    "afterPack": "./sign-backend.cjs",
+    "win": {"target": ["nsis"], "signAndEditExecutable": false},
     "nsis": {
       "oneClick": false, "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true, "createStartMenuShortcut": true,
-      "deleteAppDataOnUninstall": false,
+      "deleteAppDataOnUninstall": false, "runAfterFinish": false,
       "artifactName": "TaoBaoPriceCalculator-${version}-windows-${arch}-setup.exe"
     },
-    "mac": { "target": ["dmg"], "category": "public.app-category.finance", "identity": null },
-    "linux": { "executableName": "taobao-price-calculator", "target": ["AppImage", "deb"], "category": "Utility", "maintainer": "Azurefly" },
+    "mac": {
+      "target": ["dmg"], "category": "public.app-category.finance",
+      "identity": "-", "hardenedRuntime": true, "notarize": false,
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.plist"
+    },
+    "linux": {"executableName": "taobao-price-calculator", "target": ["AppImage", "deb"], "category": "Utility", "maintainer": "Azurefly"},
     "publish": null
   }
 }

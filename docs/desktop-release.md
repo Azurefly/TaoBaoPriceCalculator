@@ -1,37 +1,31 @@
-# v0.3.0 · 多端本地桌面预览版
+# v0.3.1 — Mac 签名修复与最终安装包验收
 
-下载本页 **Assets** 中对应系统的安装包，不是 Source code 压缩包。
+v0.3.0 的 Mac 打包配置显式跳过签名，且测试只启动构建目录里的应用。用户报告下载后提示“已损坏”。本版修复这一发布缺口，不把构建成功等同于用户安装成功。
 
-| 平台 | 安装包 | 使用方式 |
-| --- | --- | --- |
-| Windows x64 | `*-windows-x64-setup.exe` | 双击安装，开始菜单或桌面启动 |
-| macOS Intel | `*-mac-x64.dmg` | 打开后拖入 Applications |
-| macOS Apple Silicon | `*-mac-arm64.dmg` | 打开后拖入 Applications |
-| Linux x64 | `*.AppImage` | 赋予执行权限后启动；需桌面环境与可用 Chromium 沙箱 |
-| Debian / Ubuntu x64 | `*.deb` | 用系统软件安装器安装；推荐 Ubuntu 22.04 及以上 |
+## 改动
 
-安装包内置 Python、本地计算服务和 Electron，不需要安装 Python、Node.js 或运行 pip/npm。首次启动本地计算无需下载依赖。联网淘宝或下载新版仍需网络。
+- Mac 改为显式 ad-hoc 签名，保持 hardened runtime；先为内置 Python、扩展库、Playwright 本机代码签名，再封装应用。
+- 新增签名回归测试：最终 DMG 校验、挂载、复制安装、整体与嵌套代码的严格签名检查、架构检查和复制后启动测试。
+- 下载 v0.3.0 DMG 只做签名对照，不执行旧应用；结果保存在附件 installer-validation-mac-*.json。
+- 单独记录带 quarantine 属性的 Gatekeeper 评估。**签名完整不等于系统信任，也不等于 Apple 公证。**
+- Windows 新增最终 EXE 静默安装后的启动与卸载命令测试；Linux 新增 DEB 和 AppImage 解包后的运行测试。
+- 修复版本测试硬编码；不更改购物数据路径、不清空数据、不关闭系统安全设置。
 
-## 新增
+## 下载选择
 
-- 独立应用窗口、单实例、随机回环端口、应用与数据目录分离。
-- 关闭应用时终止本地服务；父进程异常退出也通过管道关闭服务。
-- 中文数据路径、轮转日志、菜单打开数据目录、下载新版入口。
-- 每个平台原生构建，并执行冻结服务 HTTP 测试、演示计算、桌面窗口冒烟测试；全部通过才发布整套安装包。
-- 提供 `SHA256SUMS.txt`、构建提交清单和此次构建共用的 npm 锁文件。
+Windows x64：windows-x64-setup.exe；Mac Apple 芯片：mac-arm64.dmg；Mac Intel：mac-x64.dmg；Linux x64：AppImage 或 amd64.deb。Source code 不是安装程序。
 
-## 数据与升级
+## Mac 首次打开
 
-- Windows：`%APPDATA%/TaoBaoPriceCalculator/storage/`
-- macOS：`~/Library/Application Support/TaoBaoPriceCalculator/storage/`
-- Linux：`$XDG_CONFIG_HOME/TaoBaoPriceCalculator/storage/`，未设置时通常为 `~/.config/TaoBaoPriceCalculator/storage/`。
+1. 退出旧应用，将新版 DMG 中的应用拖入“应用程序”并替换旧应用；不要删除 Application Support 中的数据。
+2. 核对 SHA256SUMS.txt。安装后的签名可使用 `codesign --verify --deep --strict --verbose=2 /Applications/TaoBaoPriceCalculator.app` 检查。
+3. 本版仅有 ad-hoc 完整性签名，没有 Developer ID 证书或 Apple 公证。确认来源和完整性后，可尝试系统设置 → 隐私与安全性 → 仍要打开，按系统提示仅批准此应用。
+4. 若仍报告“已损坏”或签名检查失败，请停止启动并报告输出；不要全局关闭 Gatekeeper、SIP 或杀毒保护。
 
-覆盖安装与卸载默认保留数据。旧源码版请先导出项目 JSON，再在桌面版“数据与说明”导入；不自动扫描或搬走旧数据。新版下载后手动覆盖安装，没有静默下载安装代码。
+**本版不承诺浏览器下载后无警告双击即用。** 正式的可信分发需要持有者的 Developer ID Application 证书以及 Apple 公证。没有这些凭据，不能伪造系统信任。不要把证书私钥或密码发到聊天、提交到公开仓库。
 
-## 必须知道的边界
+## 测试边界
 
-这是**未配置发布者代码签名/Apple 公证的预览版**，系统可能提示未知发布者。先核验仓库来源与 SHA256，再使用系统提供的正常确认流程；不要关闭系统安全保护。哈希用于核对下载一致性，不能替代发布者签名。
+安装验证报告会随 Release 一起提供。Mac 的直接可执行文件启动与 Gatekeeper 策略评估是两项独立测试；没有模拟用户 Finder 对话框点击。Windows 未模拟 SmartScreen 交互；Linux 未覆盖全部发行版依赖、DEB 系统安装和 AppImage FUSE 挂载。没有进行淘宝实账号验收。
 
-Windows 2022、macOS 15 Intel/ARM、Ubuntu 22.04 x64 是本次 CI 构建/冒烟环境；不声称已经人工验收所有系统版本、安装向导、卸载与升级组合。Linux ARM、Windows ARM、iOS、Android 原生安装包未包含。
-
-桌面壳不改变优化器证据边界：展示价不重复扣券，结果仅对已输入报价和约束成立。未登录用户淘宝、未验收个人账号自动采集，不自动提交订单、付款或退款。实验性浏览器适配器仍需实际页面校准；打包 Playwright 库不等于已包含自动采价能力。许可及配置符合条件时可使用另行安装的 Chrome/Edge，独立 profile 不复用个人默认登录态。
+来源：https://support.apple.com/en-us/102445 · https://www.electron.build/v26/docs/features/code-signing/code-signing-mac/ · https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution
