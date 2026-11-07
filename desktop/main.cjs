@@ -78,8 +78,8 @@ async function stopBackend() {
   clearTimeout(timer);
 }
 function createWindow() {
-  window = new BrowserWindow({ title: `淘宝优惠计算器 ${VERSION}`, width: 1380, height: 940,
-    minWidth: 900, minHeight: 640, show: false,
+  window = new BrowserWindow({ title: `淘宝优惠计算器 ${VERSION}`, width: 1240, height: 940,
+    minWidth: 700, minHeight: 640, show: false,
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true,
       webSecurity: true, allowRunningInsecureContent: false, webviewTag: false, spellcheck: false } });
   window.webContents.on('will-navigate', (event, url) => { if (!isLocalURL(url, origin)) event.preventDefault(); });
@@ -96,7 +96,7 @@ function setMenu() {
       { label: '下载新版本', click: () => external(RELEASES).catch(log) },
       { label: '关于 / 安装说明', click: () => dialog.showMessageBox({ type: 'info', title: '淘宝优惠计算器',
         message: `TaoBaoPriceCalculator ${VERSION}`,
-        detail: '本地计算，不自动下单、支付或退款。\n数据仅保存在本机；覆盖安装不删除数据。\n升级：下载新安装包后覆盖安装。\n旧版迁移：在“数据与说明”导入旧版 project.json。\n本版安装包未配发布者签名；请从本人仓库核验来源。' }) },
+        detail: '本地计算，不自动下单、支付或退款。\n点击“一键体验”可立即查看示例，不改真实数据。\n旧清单：右上角“更多 → 导入以前的清单”。\n高级功能：右上角“更多 → 高级设置与旧版界面”。\n覆盖安装保留数据。签名与公证状态以所下载版本的发布说明为准。' }) },
       { type: 'separator' }, { role: 'quit', label: '退出' }] },
     { label: '编辑', submenu: [{ role: 'undo', label: '撤销' }, { role: 'redo', label: '重做' },
       { type: 'separator' }, { role: 'cut', label: '剪切' }, { role: 'copy', label: '复制' },
@@ -132,7 +132,7 @@ else {
       await window.webContents.executeJavaScript(`new Promise((resolve, reject) => {
         let attempts = 0;
         const timer = setInterval(() => {
-          if (document.querySelector('#stats')?.children.length === 4) {
+          if (document.body.dataset.ready === 'true') {
             clearInterval(timer);
             if (typeof window.require !== 'undefined' || typeof window.process !== 'undefined')
               reject(new Error('Unexpected Node capability in renderer'));
@@ -140,9 +140,18 @@ else {
           } else if (++attempts > 100) { clearInterval(timer); reject(new Error('Frontend initialization timed out')); }
         }, 100);
       })`);
-      console.log(JSON.stringify({ desktop_smoke: 'passed', version: VERSION, platform: process.platform, arch: process.arch }));
+      const before = await apiRequest('/api/project');
+      await window.webContents.executeJavaScript(`document.querySelector('#demo').click(); new Promise((resolve,reject)=>{
+        let attempts=0; const timer=setInterval(()=>{
+          const result=document.querySelector('.result-money');
+          if(result && result.textContent==='¥1202.00' && !document.querySelector('#demo-banner').hidden){clearInterval(timer);resolve(true);}
+          else if(++attempts>250){clearInterval(timer);reject(new Error('One-click demo did not finish'));}
+        },100);
+      })`);
+      if (await apiRequest('/api/project') !== before) throw new Error('Demo changed real project data');
+      console.log(JSON.stringify({ desktop_smoke: 'passed', version: VERSION, platform: process.platform, arch: process.arch, one_click_demo: true }));
       if (process.env.PROMOPATH_DESKTOP_SMOKE_REPORT)
-        fs.writeFileSync(process.env.PROMOPATH_DESKTOP_SMOKE_REPORT, JSON.stringify({ passed: true, version: VERSION, title }));
+        fs.writeFileSync(process.env.PROMOPATH_DESKTOP_SMOKE_REPORT, JSON.stringify({ passed: true, version: VERSION, title, one_click_demo: true, demo_preserves_project: true }));
       app.quit();
     }
   }).catch(async e => {

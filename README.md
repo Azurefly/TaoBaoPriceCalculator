@@ -1,64 +1,59 @@
-# TaoBaoPriceCalculator · 淘宝优惠计算器
+# TaoBaoPriceCalculator · 淘宝省钱助手
 
-**多端本地桌面版**：比较优惠活动中的拆单、合单与付款顺序；支持普通促销、618、双十一、品牌和直播间活动配置，不把券后展示价当原价重复扣券。
+本地比较淘宝/天猫活动里的合单、拆单和付款顺序。**v0.4.0 默认使用简单界面：选商品 → 核对价格 → 看付款方案。**
 
-## 下载安装与发行状态
+## 第一次打开，直接点「一键体验」
 
-前往 [GitHub Releases](https://github.com/Azurefly/TaoBaoPriceCalculator/releases)，下载 Assets 中对应安装包（不是 Source code）。
+不用登录、不用上传文件、不用配置券、不用选择计算模式。程序自动准备虚构商品和优惠，并展示每一笔怎么购买。
+点击「模拟完成这一笔」体验步骤；退出后回到原来的清单。**整个体验不改真实数据，不产生订单，也不扣优惠。**
 
-> **开发自测包不等于普通用户分发版。** `*-preview.*` 是 Mac 临时签名、未公证的开发版本，可能被系统拒绝；不要关闭系统保护。正式分发必须经过签名、公证、最终安装包测试和人工首次安装验收。签名凭据未配置时不能生成符合这些标准的正式包。
->
-> v0.3.0 的 Mac 包曾报告“已损坏”。不要继续用旧包判断新流程是否已验收；以具体 Release 的状态和附件记录为准。
+用自己的商品：先填名称（价格可稍后填），再记录淘宝确认订单页的实际应付金额和已使用优惠，点击「帮我算怎么付更省」。
+结果用商品名称、金额和付款步骤说明，不要求普通用户理解 JSON、SKU ID、候选预算或资源账本。
+
+详细说明：[简单模式与一键体验](docs/simple-mode.md)。旧版全部功能保留在 **更多 → 高级设置与旧版界面**（`/advanced`）。
+
+## 下载安装
+
+到 [GitHub Releases](https://github.com/Azurefly/TaoBaoPriceCalculator/releases) 的 Assets 下载对应安装包，不是 Source code。
 
 | 系统 | 文件 |
-| --- | --- |
+|---|---|
 | Windows x64 | `*-windows-x64-setup.exe` |
-| macOS Intel | `*-mac-x64.dmg` |
 | macOS Apple Silicon | `*-mac-arm64.dmg` |
-| Linux x64 | `*.AppImage` 或 `*.deb` |
+| macOS Intel | `*-mac-x64.dmg` |
+| Linux x64 | `*.deb` 或 `*.AppImage` |
 
-安装包内置 Python、桌面窗口和本地服务，不需要手动安装开发环境。不包含 iOS/Android 原生客户端。
-覆盖安装和卸载默认保留数据。新版本发布流程见 [正式分发与自测流程](docs/release-process.md)。
+安装包内置运行环境，不需手工安装 Python 或 Node.js。当前自动发布走 **preview 开发自测渠道**，
+Mac 为临时签名且未完成 Apple 公证，仍可能被系统阻止；界面改版不等于解决了签名、公证和首次安装问题。
+正式分发必须另行通过签名、系统信任和首次安装验收。不要关闭系统安全保护。
+见 [发行说明](docs/desktop-release.md) 和 [发布验收流程](docs/release-process.md)。不包含 iOS/Android 原生客户端。
 
-## 使用与数据
+## 数据与使用边界
 
-打开应用 → 运行演示 → 结算报价中按规则模拟 → 优化付款路径选择规则模式。自己的订单应录入实际结算金额和完整权益消耗；严格模式不会把模拟结果当真实支付价格。
+- 本地保存项目和自动备份；升级保留用户目录。旧版清单从「更多 → 导入以前的清单」导入。
+- 展示价只是参考，不从已经券后/红包后的金额再减优惠。实际报价已经扣过定金就不再扣一次。
+- 每张券和红包只占用一次。用掉其他优惠后价格是否仍成立，必须明确核对，程序不默认独立。
+- 支付仍由本人在淘宝完成。确认真实付款后，才在本程序登记、更新余额并重新核价。
+- 仅在已输入的有效报价和约束内比较，不保证全淘宝、全部入口或未来价格的最低价。
+- 退款情景、复杂权益、规则模拟和实验性浏览器适配保留在高级界面。
 
-数据保存在独立用户目录，菜单“应用 → 打开数据目录”可查看。旧版先导出项目 JSON，再在桌面版导入。下载新版本后手动覆盖安装，不静默下载或执行更新。
+**不是淘宝官方产品，也不是登录后能全自动读取全部优惠的成品。** 当前普通流程需本人记录结算价格。
+实验性浏览器适配仍需满足平台适用要求并校准页面；不自动下单、付款、退款，不绕过验证码。
+示例全部虚构；不会打包个人订单、Cookie、`.env` 或浏览器登录态。数据目录可从应用菜单打开。
 
-## 已有功能
+## 开发与测试
 
-- 满减、每满减、折扣封顶、件数门槛、互斥、范围与有效期配置。
-- 每张券/红包唯一账本，避免多个单品展示价重复兑现同一优惠。
-- 接近门槛组合、分散分组及补集；比较逐件、合并、自由拆合。
-- 付款完成时点的权益检查、确定性返券依赖、运费和定金核对。
-- 实际付款登记、版本冲突保护、20 份自动备份、退款情景与导出。
-
-“最优”仅指输入的有效报价、资源与时间约束内的结果，不保证淘宝全部入口和未来价格的全局最低价。
-
-## 淘宝接入边界
-
-不是淘宝官方产品，不是已完成真实账号全量采价的成品。实验性浏览器适配默认关闭，仍需满足适用要求并校准页面；不自动下单、支付、退款，不绕过验证码。桌面包内含 Playwright 库，可配置使用本机 Chrome/Edge，但不内置淘宝登录态。公共示例完全虚构，不含个人订单或截图。
-
-## 源码运行（开发者）
-
-需要 Python 3.11+，首次安装依赖需联网。macOS/Linux 运行 `bash start.sh`；Windows 双击 `start.bat`。也可：
-
-```bash
-python -m venv .venv
-# 激活虚拟环境后
-python -m pip install -r requirements.txt
-python run.py
-```
-
-源码界面默认 `http://127.0.0.1:8765`；桌面版使用自动分配的本机端口，不需要填写地址。
-
-## 构建和测试
+源码运行需 Python 3.11+。首次安装依赖联网：macOS/Linux `bash start.sh`；Windows 双击 `start.bat`。
 
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m pytest -q
+node --check app/static/simple.js
 node --test desktop/tests.cjs desktop/tests-signing.cjs desktop/tests-release.cjs
 ```
 
-[发布流程与凭据配置](docs/release-process.md) · [桌面构建](docs/desktop-build.md) · [核心算法说明](docs/02_架构与最优性.md) · [规则调研](docs/01_规则调研.md)
+页面测试：`python scripts/check_simple_ui.py`（需要 Playwright Chromium；也可用 `PROMOPATH_TEST_CHROMIUM` 指定已有 Chromium）。
+旧命令 `scripts/check_ui.py` 会转入这个默认界面测试。浏览器测试使用真实前端与 FastAPI TestClient 桥接，不访问淘宝。
+桌面安装验收另会真实点击一键体验，核对结果与体验前后清单一致。
+
+[架构与算法](docs/02_架构与最优性.md) · [规则调研](docs/01_规则调研.md) · [桌面构建](docs/desktop-build.md)

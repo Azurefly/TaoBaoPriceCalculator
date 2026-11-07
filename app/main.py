@@ -327,3 +327,7 @@ async def restore(body: RestoreInput, request: Request):
         raise ValueError('恢复将替换当前项目，需要明确确认')
     rev = store.restore(body.name, expected_storage_hash=body.expected_storage_hash)
     return {'restored':True, 'revision':rev}
+
+# Simple entry point and a non-destructive, one-click demo.
+from .simple import create_router
+app.include_router(create_router(store, ROOT))
