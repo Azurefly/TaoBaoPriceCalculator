@@ -1,0 +1,150 @@
+name: Desktop installers
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'app/**'
+      - 'examples/**'
+      - 'requirements*.txt'
+      - 'scripts/check_packaged*.py'
+      - '.github/workflows/desktop-release.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  dependency-lock:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Resolve one shared dependency lock for all platforms
+        working-directory: desktop
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-dependency-lock
+          path: desktop/package-lock.json
+          if-no-files-found: error
+  build:
+    needs: dependency-lock
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            target: win
+            arch: x64
+          - os: macos-15-intel
+            target: mac
+            arch: x64
+          - os: macos-15
+            target: mac
+            arch: arm64
+          - os: ubuntu-22.04
+            target: linux
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-dependency-lock
+          path: desktop
+      - name: Install Python build dependencies
+        run: python -m pip install -r requirements-desktop.txt -r requirements-dev.txt
+      - name: Run core, API, desktop lifecycle and shell security tests
+        run: |
+          python -m pytest -q
+          node --test desktop/tests.cjs
+          node --check desktop/main.cjs
+      - name: Freeze backend (includes Python and application dependencies)
+        run: python -m PyInstaller --noconfirm --clean desktop/backend.spec
+      - name: Test the frozen binary over real local HTTP
+        run: python scripts/check_packaged_backend.py
+      - name: Install locked desktop build dependencies
+        working-directory: desktop
+        run: npm ci --no-audit --no-fund
+      - name: Build native installer
+        working-directory: desktop
+        run: npx --no-install electron-builder --${{ matrix.target }} --${{ matrix.arch }} --publish never
+      - name: Test packaged desktop window (Windows and macOS)
+        if: runner.os != 'Linux'
+        run: python scripts/check_packaged_desktop.py
+      - name: Test packaged desktop window (Linux; sandbox stays enabled)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum python scripts/check_packaged_desktop.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.target }}-${{ matrix.arch }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.AppImage
+            release/*.deb
+          if-no-files-found: error
+          retention-days: 30
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: release-assets
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-dependency-lock
+          path: release-assets
+      - name: Verify completeness and create checksums
+        shell: python
+        run: |
+          import hashlib, json, os
+          from pathlib import Path
+          root=Path('release-assets')
+          files=sorted(p for p in root.iterdir() if p.is_file())
+          assert len(list(root.glob('*.exe')))==1
+          assert len(list(root.glob('*.dmg')))==2
+          assert len(list(root.glob('*.AppImage')))==1
+          assert len(list(root.glob('*.deb')))==1
+          manifest={'commit':os.environ['GITHUB_SHA'],'version':json.loads(Path('desktop/package.json').read_text())['version'],
+                    'publisher_signed':False,'files':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in files}}
+          (root/'build-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+          files=sorted(p for p in root.iterdir() if p.is_file())
+          (root/'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in files))
+      - name: Publish complete preview release (never overwrite an existing version)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./desktop/package.json').version")
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Version v$VERSION already exists; left unchanged." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh release create "v$VERSION" release-assets/* --target "$GITHUB_SHA" \
+            --title "TaoBaoPriceCalculator v$VERSION · 多端桌面预览版" \
+            --notes-file docs/desktop-release.md --prerelease

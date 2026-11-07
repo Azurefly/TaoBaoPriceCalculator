@@ -10,3 +10,9 @@ browser-profile/
 *.log
 .DS_Store
 test-artifacts/
+node_modules/
+dist/
+build/
+release/
+*.dmp
+desktop/package-lock.json
