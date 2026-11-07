@@ -2,9 +2,13 @@
 
 **多端本地桌面版**：比较优惠活动中的拆单、合单与付款顺序；支持普通促销、618、双十一、品牌和直播间活动配置，不把券后展示价当原价重复扣券。
 
-## 下载安装
+## 下载安装与发行状态
 
-前往 [GitHub Releases](https://github.com/Azurefly/TaoBaoPriceCalculator/releases)，下载 **Assets** 中对应安装包（不是 Source code）：
+前往 [GitHub Releases](https://github.com/Azurefly/TaoBaoPriceCalculator/releases)，下载 Assets 中对应安装包（不是 Source code）。
+
+> **开发自测包不等于普通用户分发版。** `*-preview.*` 是 Mac 临时签名、未公证的开发版本，可能被系统拒绝；不要关闭系统保护。正式分发必须经过签名、公证、最终安装包测试和人工首次安装验收。签名凭据未配置时不能生成符合这些标准的正式包。
+>
+> v0.3.0 的 Mac 包曾报告“已损坏”。不要继续用旧包判断新流程是否已验收；以具体 Release 的状态和附件记录为准。
 
 | 系统 | 文件 |
 | --- | --- |
@@ -13,15 +17,14 @@
 | macOS Apple Silicon | `*-mac-arm64.dmg` |
 | Linux x64 | `*.AppImage` 或 `*.deb` |
 
-**安装包内置 Python、桌面窗口和本地服务，不需要手动安装开发环境。** 安装包只会在四个平台构建与烟雾测试全部通过后发布；Release 不含附件时，不能把源码压缩包当安装包。
-
-当前为未配置发布者签名和 Apple 公证的预览发行。系统可能提示未知发布者；先核验来源及 `SHA256SUMS.txt`，不要关闭系统安全保护。兼容范围和使用方法见 [桌面发行说明](docs/desktop-release.md)。不包含 iOS/Android 原生客户端。
+安装包内置 Python、桌面窗口和本地服务，不需要手动安装开发环境。不包含 iOS/Android 原生客户端。
+覆盖安装和卸载默认保留数据。新版本发布流程见 [正式分发与自测流程](docs/release-process.md)。
 
 ## 使用与数据
 
 打开应用 → 运行演示 → 结算报价中按规则模拟 → 优化付款路径选择规则模式。自己的订单应录入实际结算金额和完整权益消耗；严格模式不会把模拟结果当真实支付价格。
 
-数据保存在独立用户目录，菜单“应用 → 打开数据目录”可查看。覆盖安装和卸载默认保留数据。旧版先导出项目 JSON，再在桌面版导入。下载新版本后手动覆盖安装，不静默下载或执行更新。
+数据保存在独立用户目录，菜单“应用 → 打开数据目录”可查看。旧版先导出项目 JSON，再在桌面版导入。下载新版本后手动覆盖安装，不静默下载或执行更新。
 
 ## 已有功能
 
@@ -35,7 +38,7 @@
 
 ## 淘宝接入边界
 
-**不是淘宝官方产品，不是已完成真实账号全量采价的成品。** 实验性浏览器适配默认关闭，仍需满足适用要求并校准页面；不自动下单、支付、退款，不绕过验证码。桌面包内含 Playwright 库，可配置使用本机 Chrome/Edge，但不内置淘宝登录态。公共示例完全虚构，不含个人订单或截图。
+不是淘宝官方产品，不是已完成真实账号全量采价的成品。实验性浏览器适配默认关闭，仍需满足适用要求并校准页面；不自动下单、支付、退款，不绕过验证码。桌面包内含 Playwright 库，可配置使用本机 Chrome/Edge，但不内置淘宝登录态。公共示例完全虚构，不含个人订单或截图。
 
 ## 源码运行（开发者）
 
@@ -55,7 +58,7 @@ python run.py
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m pytest -q
-node --test desktop/tests.cjs
+node --test desktop/tests.cjs desktop/tests-signing.cjs desktop/tests-release.cjs
 ```
 
-[桌面构建与发布](docs/desktop-build.md) · [核心算法说明](docs/02_架构与最优性.md) · [规则调研](docs/01_规则调研.md)
+[发布流程与凭据配置](docs/release-process.md) · [桌面构建](docs/desktop-build.md) · [核心算法说明](docs/02_架构与最优性.md) · [规则调研](docs/01_规则调研.md)

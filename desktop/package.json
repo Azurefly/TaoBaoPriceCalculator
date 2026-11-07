@@ -1,13 +1,13 @@
 {
   "name": "taobao-price-calculator",
   "productName": "TaoBaoPriceCalculator",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Local promotion payment-path calculator / 本地优惠付款路径计算器",
   "author": "Azurefly",
   "private": true,
   "main": "main.cjs",
   "homepage": "https://github.com/Azurefly/TaoBaoPriceCalculator",
-  "scripts": {"start": "electron .", "test": "node --test tests*.cjs", "dist": "electron-builder --publish never"},
+  "scripts": {"start": "electron .", "test": "node --test tests*.cjs", "dist": "electron-builder --config builder.config.cjs --publish never"},
   "devDependencies": {"electron": "45.2.3", "electron-builder": "26.18.0"},
   "build": {
     "appId": "io.github.azurefly.taobaopricecalculator",

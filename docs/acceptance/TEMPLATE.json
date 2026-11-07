@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "tag": "v0.3.2",
+  "source_commit": "REPLACE_WITH_CANDIDATE_COMMIT",
+  "reviewer": "",
+  "tested_at": "",
+  "artifacts": {
+    "TaoBaoPriceCalculator-0.3.2-linux-amd64.deb": {
+      "sha256": "REPLACE_WITH_REAL_SHA256",
+      "os_version": "",
+      "downloaded_with_browser": false,
+      "fresh_machine": false,
+      "native_ui_install": false,
+      "first_launch": false,
+      "calculation": false,
+      "no_security_bypass": false
+    },
+    "TaoBaoPriceCalculator-0.3.2-linux-x86_64.AppImage": {
+      "sha256": "REPLACE_WITH_REAL_SHA256",
+      "os_version": "",
+      "downloaded_with_browser": false,
+      "fresh_machine": false,
+      "native_ui_install": false,
+      "first_launch": false,
+      "calculation": false,
+      "no_security_bypass": false
+    },
+    "TaoBaoPriceCalculator-0.3.2-mac-arm64.dmg": {
+      "sha256": "REPLACE_WITH_REAL_SHA256",
+      "os_version": "",
+      "downloaded_with_browser": false,
+      "fresh_machine": false,
+      "native_ui_install": false,
+      "first_launch": false,
+      "calculation": false,
+      "no_security_bypass": false,
+      "finder_launch": false,
+      "offline_launch": false
+    },
+    "TaoBaoPriceCalculator-0.3.2-mac-x64.dmg": {
+      "sha256": "REPLACE_WITH_REAL_SHA256",
+      "os_version": "",
+      "downloaded_with_browser": false,
+      "fresh_machine": false,
+      "native_ui_install": false,
+      "first_launch": false,
+      "calculation": false,
+      "no_security_bypass": false,
+      "finder_launch": false,
+      "offline_launch": false
+    },
+    "TaoBaoPriceCalculator-0.3.2-windows-x64-setup.exe": {
+      "sha256": "REPLACE_WITH_REAL_SHA256",
+      "os_version": "",
+      "downloaded_with_browser": false,
+      "fresh_machine": false,
+      "native_ui_install": false,
+      "first_launch": false,
+      "calculation": false,
+      "no_security_bypass": false
+    }
+  }
+}

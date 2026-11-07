@@ -1,9 +1,9 @@
 'use strict';
-// Sign the frozen Python/Playwright native code before electron-builder seals the app.
-// Never use `codesign --deep` for signing: nested code is signed inside out.
+// Sign nested code before the outer app is sealed. No --deep signing or library entitlements.
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const {execFileSync} = require('node:child_process');
+const {channel, buildConfig} = require('./release-config.cjs');
 const MACHO = new Set(['feedface', 'cefaedfe', 'feedfacf', 'cffaedfe', 'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca']);
 function isMachO(file) {
   const fd = fs.openSync(file, 'r');
@@ -12,7 +12,7 @@ function isMachO(file) {
 }
 function collect(directory) {
   const native = [], bundles = [];
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+  for (const entry of fs.readdirSync(directory, {withFileTypes: true})) {
     const file = path.join(directory, entry.name);
     if (entry.isSymbolicLink()) continue;
     if (entry.isDirectory()) {
@@ -20,24 +20,35 @@ function collect(directory) {
       if (/\.(framework|app|xpc|bundle)$/.test(entry.name)) bundles.push(file);
     } else if (entry.isFile() && isMachO(file)) native.push(file);
   }
-  return { native, bundles };
+  return {native, bundles};
+}
+function signArgs(file, executable, env = process.env) {
+  const official = channel(env) === 'distribution';
+  if (official) buildConfig(env, 'darwin');
+  const args = ['--force', '--sign', official ? env.TBPC_MAC_CERT_SHA1 : '-',
+    official ? '--timestamp' : '--timestamp=none'];
+  if (official) args.push('--keychain', env.CSC_KEYCHAIN);
+  if (executable) args.push('--options', 'runtime', '--entitlements', path.join(__dirname,
+    official ? 'entitlements.distribution.plist' : 'entitlements.mac.plist'), '--generate-entitlement-der');
+  return [...args, file];
 }
 async function signBackend(context) {
   if (context.electronPlatformName !== 'darwin') return;
+  const config = buildConfig(process.env, 'darwin');
+  if (context.packager.platformSpecificBuildOptions.identity !== config.mac.identity)
+    throw new Error('Expected explicit ad-hoc or validated Developer ID identity; refusing signing opt-out');
   const app = path.join(context.appOutDir, context.packager.appInfo.productFilename + '.app');
-  const backend = path.join(app, 'Contents', 'Resources', 'backend');
-  const identity = context.packager.platformSpecificBuildOptions.identity;
-  if (identity !== '-') throw new Error('This preview hook requires explicit ad-hoc identity; do not silently skip signing.');
-  const entitlements = path.join(__dirname, 'entitlements.mac.plist');
-  const { native, bundles } = collect(backend);
+  const {native, bundles} = collect(path.join(app, 'Contents', 'Resources', 'backend'));
   if (!native.length) throw new Error('Frozen backend contains no native binaries');
-  for (const file of [...native, ...bundles]) {
-    execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', '--timestamp=none', '--options', 'runtime',
-      '--entitlements', entitlements, '--generate-entitlement-der', file], { stdio: 'pipe' });
+  for (const file of native) {
+    const info = execFileSync('/usr/bin/file', ['-b', file], {encoding: 'utf8'});
+    execFileSync('/usr/bin/codesign', signArgs(file, /\bexecutable\b/.test(info)), {stdio: 'pipe'});
   }
-  for (const file of native) execFileSync('/usr/bin/codesign', ['--verify', '--strict', file], { stdio: 'pipe' });
-  console.log(`Ad-hoc signed and verified ${native.length} embedded native binaries; publisher identity is NOT verified.`);
+  for (const bundle of bundles.sort((a, b) => b.split(path.sep).length - a.split(path.sep).length)) {
+    execFileSync('/usr/bin/codesign', signArgs(bundle, /\.(app|xpc)$/.test(bundle)), {stdio: 'pipe'});
+  }
+  for (const file of native) execFileSync('/usr/bin/codesign', ['--verify', '--strict', file], {stdio: 'pipe'});
+  console.log(`Signed and verified ${native.length} embedded native files (${channel()}).`);
 }
 module.exports = signBackend;
-module.exports.isMachO = isMachO;
-module.exports.collect = collect;
+Object.assign(module.exports, {isMachO, collect, signArgs});

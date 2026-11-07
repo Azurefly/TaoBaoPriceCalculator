@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 
-VERSION = '0.3.1'
+VERSION = '0.3.2'
 
 
 def prepare_environment(data_dir: Path) -> Path:

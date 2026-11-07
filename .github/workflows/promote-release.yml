@@ -1,0 +1,56 @@
+name: Promote verified distribution
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing signed DRAFT, e.g. v0.3.2; requires docs/acceptance/v0.3.2.json'
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: promote-distribution
+  cancel-in-progress: false
+jobs:
+  promote:
+    if: github.ref == 'refs/heads/main'
+    environment: desktop-production
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate candidate and exact-byte manual acceptance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, re
+          if not re.fullmatch(r'v\d+\.\d+\.\d+', os.environ['RELEASE_TAG']):
+              raise SystemExit('Only a stable version tag is accepted')
+          PY
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          gh release view "$RELEASE_TAG" --json body,targetCommitish > release-info.json
+          gh release download "$RELEASE_TAG" --dir candidate
+          python scripts/approve_distribution.py --root candidate --evidence "docs/acceptance/$RELEASE_TAG.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          manifest=json.loads(Path('candidate/build-manifest.json').read_text())
+          info=json.loads(Path('release-info.json').read_text())
+          assert info['targetCommitish'] == manifest['source_commit']
+          assert os.environ['RELEASE_TAG'] == 'v' + manifest['version']
+          record=json.loads(Path('docs/acceptance/'+os.environ['RELEASE_TAG']+'.json').read_text())
+          summary='# TaoBaoPriceCalculator '+os.environ['RELEASE_TAG']+'\n\n'
+          summary+='正式分发：签名、公证、自动安装检查及逐安装包的人工首次安装记录已通过发布门槛。\n\n'
+          summary+='验收记录：见附件 acceptance-record.json。审核人：'+record['reviewer']+'；时间：'+record['tested_at']+'。\n\n'
+          summary+='安装包及测试记录的校验值见 build-manifest.json 与 SHA256SUMS.txt。正常首次互联网来源确认不等于异常拦截。\n'
+          Path('approved-notes.md').write_text(summary)
+          PY
+          cp "docs/acceptance/$RELEASE_TAG.json" acceptance-record.json
+          gh release upload "$RELEASE_TAG" acceptance-record.json
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest \
+            --title "TaoBaoPriceCalculator $RELEASE_TAG · 已验收桌面版" --notes-file approved-notes.md
