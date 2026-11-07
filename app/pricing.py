@@ -10,135 +10,7 @@ from datetime import datetime, timedelta
 from .models import Item, Project, Rule, Quote, utcnow
 
 
-def distribute(amount: int, weights: dict[str, int]) -> dict[str, int]:
-    """Largest-remainder allocation with deterministic cent rounding."""
-    total = sum(weights.values())
-    amount = min(amount, total)
-    if not total:
-        return dict.fromkeys(weights, 0)
-    allocation = {k: amount * v // total for k, v in weights.items()}
-    remainders = sorted(weights, key=lambda k: (-(amount * weights[k] % total), k))
-    for key in remainders[:amount - sum(allocation.values())]:
-        allocation[key] += 1
-    return allocation
-
-
-def eligible(rule: Rule, item: Item) -> bool:
-    return ((not rule.item_ids or item.id in rule.item_ids)
-            and (not rule.shop_ids or item.shop_id in rule.shop_ids)
-            and (not rule.item_tags or bool(set(rule.item_tags) & set(item.tags))))
-
-
-def simulate_group(project: Project, item_ids: list[str], at: datetime | None = None, max_states=2048) -> tuple[list[Quote], list[str]]:
-    at = at or utcnow()
-    paid = project.paid_item_ids()
-    if set(item_ids) & paid:
-        return [], ['组合含已付款商品，不能重复购买']
-    items = [x for x in project.items if x.id in item_ids]
-    if not items or len(items) != len(set(item_ids)) or len(item_ids) != len(set(item_ids)):
-        return [], ['组合含未知商品或为空']
-    blocked = [x.id for x in items if x.pricing_base_cents is None or not x.pricing_base_evidence or not x.deposit_confirmed or x.deposit_paid_cents is None]
-    if blocked:
-        return [], ['缺少可靠计价基数或定金口径：' + ', '.join(blocked)]
-    base = {x.id: x.pricing_base_cents for x in items}
-    resources = {r.id: r for r in project.resources}
-    active = sorted([r for r in project.rules if r.confirmed and (not r.channels or project.channel in r.channels)
-                     and (not r.starts_at or r.starts_at <= at) and (not r.ends_at or at < r.ends_at)], key=lambda r: (r.phase, r.id))
-    # remaining prices, resource ledger, exclusive groups, applied rules, expiration
-    states = [(base.copy(), {}, frozenset(), [], at + timedelta(minutes=10))]
-    warnings = []
-    for r in active:
-        more = []
-        applied_state_ids = set()
-        for state_index, (remaining, consumed, used, applied, expiry) in enumerate(states):
-            if r.exclusive_group and r.exclusive_group in used:
-                continue
-            targets = [x for x in items if eligible(r, x)]
-            if not targets or sum(x.quantity for x in targets) < r.min_quantity:
-                continue
-            basis = base if r.threshold_basis == 'base' else remaining
-            qualify = sum(basis[x.id] for x in targets)
-            if qualify < r.threshold_cents:
-                continue
-            res = resources.get(r.resource_id) if r.resource_id else None
-            if res and ((res.starts_at and at < res.starts_at) or (res.ends_at and at >= res.ends_at)):
-                continue
-            if r.resource_id and consumed.get(r.resource_id, 0) + r.resource_units > resources[r.resource_id].available:
-                continue
-            db = base if r.discount_basis == 'base' else remaining
-            total = sum(db[x.id] for x in targets)
-            if r.kind in ('fixed', 'quantity_fixed'):
-                discount = r.amount_cents
-            elif r.kind == 'percent':
-                discount = (total * r.discount_bps + 5000) // 10000
-            else:
-                discount = (qualify // r.threshold_cents) * r.amount_cents
-            if r.cap_cents is not None:
-                discount = min(discount, r.cap_cents)
-            discount = min(discount, sum(remaining[x.id] for x in targets))
-            if not discount:
-                continue
-            allocations = distribute(discount, {x.id: remaining[x.id] for x in targets})
-            new = {k: v - allocations.get(k, 0) for k, v in remaining.items()}
-            ledger = consumed.copy()
-            if r.resource_id:
-                ledger[r.resource_id] = ledger.get(r.resource_id, 0) + r.resource_units
-            groups = used | ({r.exclusive_group} if r.exclusive_group else set())
-            new_expiry = min(expiry, r.ends_at) if r.ends_at else expiry
-            if res and res.ends_at:
-                new_expiry = min(new_expiry, res.ends_at)
-            applied_state_ids.add(state_index)
-            more.append((new, ledger, frozenset(groups), applied + [r.id], new_expiry))
-        unique = {}
-        retained = states if r.selection_mode == 'optional' else [s for i,s in enumerate(states) if i not in applied_state_ids]
-        for state in retained + more:
-            rem, con, groups, applied, exp = state
-            key = (tuple(sorted(rem.items())), tuple(sorted(con.items())), tuple(sorted(groups)), exp)
-            unique.setdefault(key, state)
-        states = list(unique.values())
-        if len(states) > max_states:
-            states.sort(key=lambda s: (sum(s[0].values()), sum(s[1].values())))
-            states = states[:max_states]
-            warnings.append('组内优惠变体达到上限；仅保留当前低价变体，不构成全量最优证明')
-    deposit = sum(x.deposit_paid_cents or 0 for x in items)
-    fingerprint = project.fingerprint()
-    quotes = []
-    # Same resource consumption: only retain the cheapest cash variant.
-    best = {}
-    for remaining, consumed, groups, applied, expiry in states:
-        total = sum(remaining.values())
-        if any(remaining[x.id] < (x.deposit_paid_cents or 0) for x in items):
-            warnings.append('单品优惠后货款低于其定金，规则模型不跨商品抵扣或推断退款，请补录真实结算报价')
-            continue
-        shipping = 0
-        for fee in project.shipping_rules:
-            matched = [x for x in items if x.shop_id == fee.shop_id]
-            if not matched:
-                continue
-            if not fee.confirmed or not fee.evidence_note.strip():
-                warnings.append('存在未确认运费配置，相关组不生成模拟报价：' + fee.shop_id)
-                shipping = None
-                break
-            fee_basis = base if fee.threshold_basis == 'base' else remaining
-            amount = sum(fee_basis[x.id] for x in matched)
-            if fee.free_threshold_cents is None or amount < fee.free_threshold_cents:
-                shipping += fee.fee_cents
-        if shipping is None:
-            continue
-        key = (tuple(sorted(consumed.items())), expiry)
-        landed = total + shipping
-        if key not in best or landed < best[key][-1]:
-            best[key] = (remaining, consumed, applied, expiry, shipping, landed)
-    for remaining, consumed, applied, expiry, shipping, _ in best.values():
-        raw = json.dumps([sorted(item_ids), applied], ensure_ascii=False, separators=(',', ':'))
-        quotes.append(Quote(id='model-' + hashlib.sha256(raw.encode()).hexdigest()[:16], item_ids=sorted(item_ids),
-                            cash_due_cents=sum(remaining.values())-deposit+shipping, consumed=consumed,
-                            source='model', ledger_complete=True, portable_state=True,
-                            context_fingerprint=fingerprint, captured_at=at, valid_from=at, valid_until=expiry,
-                            applied_rules=applied, discount_cents=sum(base.values())-sum(remaining.values()),
-                            evidence_note='基于用户确认的基数与规则模拟；运费/税费/未建模权益需真实核价',
-                            notes=['模型不自动补全未知规则；不可当作淘宝实时报价', f'显式配置运费 {shipping} 分；未配置店铺运费仍需真实核对']))
-    return quotes, sorted(set(warnings))
+from .promotion_engine import distribute, eligible, simulate_group
 
 
 def _near_threshold(items: list[tuple[int, int]], target: int, limit=12) -> list[int]:
@@ -193,14 +65,41 @@ def generate_groups(project: Project, budget=500, exhaustive_limit=8) -> tuple[l
     add(full, '全部未付商品')
     for shop in sorted({x.shop_id for x in items if x.shop_id}):
         add(sum(1 << i for i,x in enumerate(items) if x.shop_id == shop), '同店')
-    rules = [r for r in project.rules if r.confirmed and r.threshold_cents > 0
-             and (not r.channels or project.channel in r.channels)]
+    for rule in [r for r in project.rules if r.confirmed]:
+        required = set(rule.required_item_quantities)
+        relevant = [i for i,x in enumerate(items) if eligible(rule,x,qualifying=True) or x.id in required]
+        required_mask = sum(1 << i for i,x in enumerate(items) if x.id in required)
+        scope_mask = sum(1 << i for i in relevant)
+        add(required_mask, '必选搭配')
+        add(scope_mask, '优惠适用商品')
+        add(full ^ scope_mask, '优惠范围补集')
+        if required_mask:
+            for i in relevant:
+                add(required_mask | (1 << i), '搭配补足')
+        # Quantity-only offers need candidates even without a monetary threshold.
+        if rule.min_quantity > 1 or rule.min_distinct_items > 1:
+            for reverse in (False,True):
+                qty, mask, distinct = 0, required_mask, 0
+                qty = sum(x.quantity for i,x in enumerate(items) if mask & (1 << i))
+                distinct = mask.bit_count()
+                for i in sorted(relevant, key=lambda j:(items[j].pricing_base_cents or 0,j), reverse=reverse):
+                    if mask & (1 << i): continue
+                    mask |= 1 << i; qty += items[i].quantity; distinct += 1
+                    if qty >= rule.min_quantity and distinct >= rule.min_distinct_items:
+                        add(mask, '满件邻近'); add(full ^ mask, '满件补集'); break
+    rules = []
+    for r in project.rules:
+        if not r.confirmed or (r.channels and project.channel not in r.channels): continue
+        if r.threshold_cents > 0: rules.append(r)
+        for tier in r.tiers:
+            if tier.threshold_cents > 0:
+                rules.append(r.model_copy(update={'threshold_cents': tier.threshold_cents}))
     pools = []
     # At most 24 distinct threshold scopes per call; remaining scopes are explicitly reported.
     seen_targets = set()
     for rule in rules:
         relevant = [(i, x.pricing_base_cents) for i,x in enumerate(items)
-                    if eligible(rule,x) and x.pricing_base_cents is not None and x.pricing_base_evidence]
+                    if eligible(rule,x,qualifying=True) and x.pricing_base_cents is not None and x.pricing_base_evidence]
         key = (tuple(relevant), rule.threshold_cents)
         if key in seen_targets:
             continue
@@ -265,7 +164,7 @@ def simulate_project(project: Project, budget=300, at=None, max_seconds=8) -> tu
         if time.monotonic()-started > max_seconds or len(quotes) >= capacity:
             stopped = True
             break
-        q, w = simulate_group(project, group, at, max_states=1024)
+        q, w = simulate_group(project, group, at, max_states=1024, deadline=started+max_seconds)
         for quote in q:
             if len(quotes) >= capacity:
                 stopped = True

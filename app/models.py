@@ -23,6 +23,12 @@ class Item(StrictModel):
     id: str = Field(min_length=1, max_length=160)
     title: str = Field(min_length=1, max_length=400)
     shop_id: str = ''
+    shop_name: str = ''
+    source_line_id: str = ''
+    product_id: str = ''
+    cart_group_ids: list[str] = Field(default_factory=list)
+    cart_group_names: list[str] = Field(default_factory=list)
+    cart_scope: str = ''
     sku: str = ''
     quantity: int = Field(default=1, ge=1, le=999)
     required: bool = True
@@ -58,12 +64,18 @@ class Resource(StrictModel):
         return self
 
 
+class DiscountTier(StrictModel):
+    threshold_cents: Money = 0
+    min_quantity: int = Field(default=1, ge=1, le=999)
+    amount_cents: Money = 0
+
+
 class Rule(StrictModel):
     id: str = Field(min_length=1, max_length=160)
     name: str
-    kind: Literal['fixed', 'percent', 'repeat_threshold', 'quantity_fixed'] = 'fixed'
+    kind: Literal['fixed', 'percent', 'repeat_threshold', 'quantity_fixed', 'tiered', 'bundle_price'] = 'fixed'
     phase: int = Field(default=10, ge=0, le=999)
-    selection_mode: Literal['optional', 'mandatory'] = 'optional'
+    selection_mode: Literal['optional', 'mandatory', 'best'] = 'optional'
     threshold_basis: Literal['base', 'remaining'] = 'remaining'
     discount_basis: Literal['base', 'remaining'] = 'remaining'
     threshold_cents: Money = 0
@@ -72,6 +84,14 @@ class Rule(StrictModel):
     cap_cents: Money | None = None
     min_quantity: int = Field(default=1, ge=1)
     item_ids: list[str] = Field(default_factory=list)
+    # Qualifying scope and discounted scope are separate. Empty qualifying scope
+    # inherits the discounted scope; it NEVER implicitly includes other stores.
+    qualifying_item_ids: list[str] = Field(default_factory=list)
+    excluded_item_ids: list[str] = Field(default_factory=list)
+    required_item_quantities: dict[str, Annotated[int, Field(strict=True, ge=1, le=999)]] = Field(default_factory=dict)
+    min_distinct_items: int = Field(default=1, ge=1, le=28)
+    tiers: list[DiscountTier] = Field(default_factory=list, max_length=20)
+    exclusive_scope: Literal['payment', 'item'] = 'payment'
     shop_ids: list[str] = Field(default_factory=list)
     item_tags: list[str] = Field(default_factory=list)
     channels: list[str] = Field(default_factory=list)
@@ -86,6 +106,16 @@ class Rule(StrictModel):
 
     @model_validator(mode='after')
     def valid_rule(self):
+        if self.kind == 'bundle_price' and (not self.item_ids or set(self.item_ids) != set(self.required_item_quantities)):
+            raise ValueError('套餐一口价必须明确每一种套餐商品及其精确数量；多套或拆数量请单独核价')
+        if self.kind == 'tiered' and not self.tiers:
+            raise ValueError('阶梯优惠至少需要一档门槛和优惠金额')
+        if self.selection_mode == 'best' and not self.exclusive_group:
+            raise ValueError('自动择优优惠必须指定互斥组')
+        if any(type(v) is not int or not 1 <= v <= 999 for v in self.required_item_quantities.values()):
+            raise ValueError('组合中每件商品的要求数量必须是1至999的整数')
+        if set(self.excluded_item_ids) & (set(self.required_item_quantities) | set(self.item_ids)):
+            raise ValueError('指定或必选商品不能同时被排除')
         if self.kind == 'repeat_threshold' and not self.threshold_cents:
             raise ValueError('repeat_threshold 必须设置大于0的门槛')
         if self.resource_id and not self.resource_units:
@@ -98,6 +128,16 @@ class Rule(StrictModel):
         return self
 
 
+class DiscountBreakdown(StrictModel):
+    rule_id: str
+    name: str
+    qualifying_item_ids: list[str]
+    discounted_item_ids: list[str]
+    qualifying_cents: Money
+    discount_cents: Money
+    allocations: dict[str, Money]
+
+
 class Quote(StrictModel):
     id: str = Field(min_length=1, max_length=160)
     item_ids: list[str] = Field(min_length=1)
@@ -107,6 +147,8 @@ class Quote(StrictModel):
     granted: dict[str, Units] = Field(default_factory=dict)
     requires_done: list[str] = Field(default_factory=list)
     requires_zero: list[str] = Field(default_factory=list)
+    # Conditional fallback prices: resource balance must be below this bound.
+    requires_less_than: dict[str, Units] = Field(default_factory=dict)
     extra_cost_cents: Money = 0
     source: Literal['checkout', 'manual', 'model', 'draft', 'demo'] = 'draft'
     ledger_complete: bool = False
@@ -120,6 +162,7 @@ class Quote(StrictModel):
     evidence_note: str = ''
     applied_rules: list[str] = Field(default_factory=list)
     discount_cents: Money = 0
+    discount_breakdown: list[DiscountBreakdown] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 
     @model_validator(mode='after')
@@ -201,12 +244,22 @@ class Project(StrictModel):
         for rule in self.rules:
             if rule.resource_id and rule.resource_id not in resources:
                 raise ValueError(f'规则{rule.id}引用了不存在的资源')
-            if not set(rule.item_ids) <= items:
+            if not (set(rule.item_ids + rule.qualifying_item_ids + rule.excluded_item_ids) | set(rule.required_item_quantities)) <= items:
                 raise ValueError(f'规则{rule.id}引用了不存在的商品')
+        best_groups = {}
+        for rule in self.rules:
+            if rule.selection_mode == 'best':
+                key = rule.exclusive_group
+                policy = (rule.phase, rule.exclusive_scope)
+                if key in best_groups and best_groups[key] != policy:
+                    raise ValueError('同一自动择优组的阶段和互斥范围必须一致')
+                best_groups[key] = policy
+        if any(r.exclusive_group in best_groups and r.selection_mode != 'best' for r in self.rules):
+            raise ValueError('自动择优组不能混入手动或强制叠加规则')
         for q in self.quotes:
             if not set(q.item_ids + q.requires_done) <= items:
                 raise ValueError(f'报价{q.id}引用了不存在的商品')
-            if not set(q.consumed.keys() | q.granted.keys() | q.observed_balances.keys() | set(q.requires_zero)) <= resources:
+            if not set(q.consumed.keys() | q.granted.keys() | q.observed_balances.keys() | set(q.requires_zero) | q.requires_less_than.keys()) <= resources:
                 raise ValueError(f'报价{q.id}引用了不存在的券/红包资源')
         paid = set()
         for payment in self.payments:

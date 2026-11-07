@@ -33,10 +33,20 @@ def allowed_url(url: str) -> bool:
         host == suffix or host.endswith('.' + suffix) for suffix in ('taobao.com', 'tmall.com', 'tmall.hk'))
 
 
+def cart_line_map(project: Project) -> dict[str, str]:
+    """Map local immutable IDs to observed DOM IDs; never match by product title."""
+    mapping = {item.id: item.source_line_id or item.id for item in project.items}
+    if len(set(mapping.values())) != len(mapping):
+        raise ValueError('清单中存在重复的网页商品行标识，请重新导入，不能猜测对应关系')
+    return mapping
+
+
 class BrowserConfig(StrictModel):
     cart_url: str = 'https://cart.taobao.com/cart.htm'
     rows: str = ''
     row_id_attribute: str = 'data-id'
+    group_tabs: str = ''
+    shop_name: str = ''
     title: str = ''
     sku: str = ''
     quantity: str = ''
@@ -62,13 +72,14 @@ class BrowserAdapter:
         self.lock = asyncio.Lock()
         self.last_trial = 0.0
         self.config = BrowserConfig()
+        self.permission_reference = ''
 
     def permitted(self) -> bool:
-        return bool(os.getenv('TAOBAO_PLATFORM_PERMISSION_REFERENCE', '').strip())
+        return bool(os.getenv('TAOBAO_PLATFORM_PERMISSION_REFERENCE', '').strip() or self.permission_reference)
 
     def require_permission(self):
         if not self.permitted():
-            raise ValueError('浏览器适配器默认关闭。淘宝现行规则要求平台书面许可；普通账号登录/用户同意不是该许可。取得许可后按README配置。')
+            raise ValueError('自动读取尚未启用。请在连接设置中填写部署方的平台许可引用；扫码登录不替代平台许可。')
 
     async def launch(self):
         self.require_permission()
@@ -82,11 +93,19 @@ class BrowserAdapter:
             channel = os.getenv('PROMOPATH_BROWSER_CHANNEL', '').strip()
             if channel and channel not in ('chrome', 'msedge'):
                 raise ValueError('浏览器channel只允许chrome或msedge')
-            self.context = await self.pw.chromium.launch_persistent_context(str(profile), headless=False,
-                viewport={'width': 1380, 'height': 940}, accept_downloads=False,
-                **({'channel': channel} if channel else {}))
+            choices = list(dict.fromkeys(([channel] if channel else []) + ['chrome', 'msedge', '']))
+            for candidate in choices:
+                try:
+                    self.context = await self.pw.chromium.launch_persistent_context(str(profile), headless=False,
+                        chromium_sandbox=True, viewport={'width': 1380, 'height': 940}, accept_downloads=False,
+                        **({'channel': candidate} if candidate else {}))
+                    break
+                except Exception:
+                    continue
+            if not self.context:
+                raise ValueError('未能打开浏览器。请安装Chrome或Edge，并关闭使用同一工具登录资料的窗口后重试。')
             page = self.context.pages[0] if self.context.pages else await self.context.new_page()
-            await page.goto('https://www.taobao.com/', wait_until='domcontentloaded', timeout=45000)
+            await page.goto('https://cart.taobao.com/cart.htm', wait_until='domcontentloaded', timeout=45000)
         except Exception:
             if self.context:
                 await self.context.close()
@@ -166,10 +185,12 @@ class BrowserAdapter:
             raise ValueError('必须校准结算应付金额节点与结算商品行，不能从总计/节省/定金文案猜金额')
         rows = page.locator(cfg.checkout_rows)
         actual = [await rows.nth(i).get_attribute(cfg.checkout_row_id_attribute) for i in range(await rows.count())]
-        if None in actual or sorted(actual) != sorted(expected_ids):
+        aliases = cart_line_map(project)
+        expected_lines = [aliases[ident] for ident in expected_ids]
+        if None in actual or sorted(actual) != sorted(expected_lines):
             raise ValueError('结算商品ID与候选组不一致；已停止，不接受这笔报价')
         if cfg.checkout_quantity:
-            quantities = {x.id:x.quantity for x in project.items}
+            quantities = {aliases[x.id]:x.quantity for x in project.items}
             for i, ident in enumerate(actual):
                 if await self._quantity(rows.nth(i),cfg.checkout_quantity) != quantities[ident]:
                     raise ValueError('结算页数量与项目不一致，拒绝采价')
@@ -217,7 +238,9 @@ class BrowserAdapter:
                     raise ValueError('购物车商品行ID重复或缺失')
                 mapping[ident] = row
             # The project must describe every loaded selectable row, otherwise hidden selections may leak in.
-            if set(mapping) != {x.id for x in project.items} or not set(expected_ids) <= mapping.keys():
+            aliases = cart_line_map(project)
+            expected_lines = {aliases[ident] for ident in expected_ids}
+            if set(mapping) != set(aliases.values()) or not expected_lines <= mapping.keys():
                 raise ValueError('购物车和项目商品集合不一致，请重新采集并核对')
             for ident, row in mapping.items():
                 cb = row.locator(cfg.checkbox)
@@ -226,7 +249,7 @@ class BrowserAdapter:
                 tag = await cb.evaluate('(e)=>e.tagName.toLowerCase()+":"+e.type')
                 if tag != 'input:checkbox':
                     raise ValueError('仅支持原生checkbox，不对未知组件执行猜测点击')
-                await cb.set_checked(ident in expected_ids, timeout=5000)
+                await cb.set_checked(ident in expected_lines, timeout=5000)
             button = page.locator(cfg.checkout_button)
             if await button.count() != 1:
                 raise ValueError('结算按钮不唯一')

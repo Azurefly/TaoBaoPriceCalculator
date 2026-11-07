@@ -80,7 +80,7 @@ def optimize(project: Project, opts: SolveOptions) -> dict:
     latest_static_finish = opts.starts_at + timedelta(seconds=opts.step_seconds * min(opts.max_orders, len(ids)-len(paid)))
     static_order_independent = all(
         c['q'].portable_state and not c['q'].granted and not c['q'].requires_done
-        and not c['q'].requires_zero and (not c['earliest'] or c['earliest'] <= opts.starts_at)
+        and not c['q'].requires_zero and not c['q'].requires_less_than and (not c['earliest'] or c['earliest'] <= opts.starts_at)
         and (not c['deadline'] or c['deadline'] >= latest_static_finish)
         for c in candidates)
     best: tuple[int, int, int] | None = None  # economic cost, cash, number of orders
@@ -128,6 +128,8 @@ def optimize(project: Project, opts: SolveOptions) -> dict:
             if any(b < n for b, n in zip(balances, c['consume'])):
                 continue
             if any(balances[rindex[r]] for r in q.requires_zero):
+                continue
+            if any(balances[rindex[r]] >= ceiling for r, ceiling in q.requires_less_than.items()):
                 continue
             if not q.portable_state and any(q.observed_balances[r] != balances[j] for j, r in enumerate(rid)):
                 continue

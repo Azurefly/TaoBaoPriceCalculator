@@ -75,6 +75,7 @@ async def value_error(request, exc):
 @app.get('/', response_class=HTMLResponse)
 async def index():
     html = (ROOT / 'app/static/index.html').read_text(encoding='utf-8')
+    html = html.replace('</head>', '<script defer src="/static/shopping-entry.js"></script></head>')
     return html.replace('__LOCAL_TOKEN__', TOKEN)
 
 app.mount('/static', StaticFiles(directory=ROOT / 'app/static'), name='static')
@@ -331,3 +332,8 @@ async def restore(body: RestoreInput, request: Request):
 # Simple entry point and a non-destructive, one-click demo.
 from .simple import create_router
 app.include_router(create_router(store, ROOT))
+
+
+# Optional shopping/cart tools extend the guided home without replacing it.
+from .shopping import create_shopping_router
+app.include_router(create_shopping_router(store, browser, ROOT))
