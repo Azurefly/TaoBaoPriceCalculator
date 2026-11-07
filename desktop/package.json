@@ -7,11 +7,7 @@
   "private": true,
   "main": "main.cjs",
   "homepage": "https://github.com/Azurefly/TaoBaoPriceCalculator",
-  "scripts": {
-    "start": "electron .",
-    "test": "node --test tests*.cjs",
-    "dist": "electron-builder --publish never"
-  },
+  "scripts": {"start": "electron .", "test": "node --test tests*.cjs", "dist": "electron-builder --publish never"},
   "devDependencies": {"electron": "45.2.3", "electron-builder": "26.18.0"},
   "build": {
     "appId": "io.github.azurefly.taobaopricecalculator",
@@ -35,7 +31,8 @@
       "target": ["dmg"], "category": "public.app-category.finance",
       "identity": "-", "hardenedRuntime": true, "notarize": false,
       "entitlements": "entitlements.mac.plist",
-      "entitlementsInherit": "entitlements.mac.plist"
+      "entitlementsInherit": "entitlements.mac.plist",
+      "minimumSystemVersion": "13.0"
     },
     "linux": {"executableName": "taobao-price-calculator", "target": ["AppImage", "deb"], "category": "Utility", "maintainer": "Azurefly"},
     "publish": null

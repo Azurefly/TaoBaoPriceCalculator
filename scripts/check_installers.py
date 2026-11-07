@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -87,6 +88,8 @@ def mac(temp):
     report['signature_integrity'] = 'passed'
     report['embedded_native_files_verified'] = len(files)
     report['installed_runtime'] = smoke(main)
+    run('codesign', '--verify', '--deep', '--strict', '--verbose=2', installed)
+    report['signature_after_runtime'] = 'passed'
     # Reproduce the downloaded-app policy check on the disposable installed copy.
     # Runtime smoke above deliberately does not claim to test first-run Finder consent.
     run('xattr', '-w', 'com.apple.quarantine', f'0083;{int(time.time()):x};TaoBaoPriceCalculatorCI;{uuid.uuid4()}', installed)
@@ -101,10 +104,28 @@ def mac(temp):
     return report
 
 
+def nsis_command(executable: Path, directory: Path, uninstall: bool = False) -> str:
+    # NSIS consumes the rest of the raw command line after /D= or _?=.
+    # These options must be last and unquoted, even when the directory has spaces.
+    target = str(directory)
+    if any(ch in target for ch in ('"', '\r', '\n', '\0')):
+        raise ValueError('Invalid NSIS directory')
+    return subprocess.list2cmdline([str(executable), '/S']) + (' _?=' if uninstall else ' /D=') + target
+
+
+def run_nsis(executable: Path, directory: Path, uninstall: bool = False):
+    if sys.platform != 'win32':
+        raise RuntimeError('NSIS install test requires Windows')
+    result = subprocess.run(nsis_command(executable, directory, uninstall),
+                            executable=str(executable), shell=False, cwd=directory.parent,
+                            capture_output=True, text=True, errors='replace', timeout=240)
+    if result.returncode:
+        raise RuntimeError(f'NSIS exited {result.returncode}: {result.stdout}\n{result.stderr}')
+
+
 def windows(temp):
-    folder = temp / 'installed'
-    # /D must be the last NSIS argument. Do not install over a user's existing app.
-    run(one('*.exe'), '/S', f'/D={folder}', timeout=240)
+    folder = temp / 'installed with spaces'
+    run_nsis(one('*.exe'), folder)
     exe = folder / 'TaoBaoPriceCalculator.exe'
     deadline = time.monotonic() + 30
     while not exe.exists() and time.monotonic() < deadline:
@@ -113,10 +134,16 @@ def windows(temp):
     uninstall = folder / 'Uninstall TaoBaoPriceCalculator.exe'
     if not uninstall.is_file():
         raise RuntimeError('Missing NSIS uninstaller')
-    run(uninstall, '/S', timeout=120)
+    # A normal NSIS uninstaller returns before its self-copied child exits.
+    # Run a copy outside the installation with _?= so we wait for actual completion.
+    copied = temp / 'uninstall-check.exe'
+    shutil.copy2(uninstall, copied)
+    run_nsis(copied, folder, uninstall=True)
+    if exe.exists():
+        raise RuntimeError('NSIS returned before removing the installed application')
     return {'format': 'nsis', 'silent_install_runtime': result,
-            'uninstall_command_succeeded': True, 'publisher_signed': False,
-            'smartscreen_interactive_tested': False}
+            'uninstall_completed': True, 'install_path_with_spaces_tested': True,
+            'publisher_signed': False, 'smartscreen_interactive_tested': False}
 
 
 def linux(temp):

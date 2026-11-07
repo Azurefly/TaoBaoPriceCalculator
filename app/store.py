@@ -62,6 +62,23 @@ class Store:
             if temp.exists():
                 temp.unlink()
 
+    def _backup_files(self) -> list[Path]:
+        # Numeric ordering also handles old names and clocks moving backwards.
+        entries = []
+        for path in self.backups.glob('project-*.json'):
+            match = re.fullmatch(r'project-(\d+)\.json', path.name)
+            if match and path.is_file():
+                entries.append((int(match[1]), path))
+        return [path for _, path in sorted(entries, key=lambda entry: entry[0])]
+
+    def _next_backup_path(self) -> Path:
+        # time_ns has coarse resolution on some systems. Never reuse a filename,
+        # including after an application restart or wall-clock rollback.
+        existing = self._backup_files()
+        latest = int(existing[-1].stem.split('-')[1]) if existing else -1
+        serial = max(0, time.time_ns(), latest + 1)
+        return self.backups / f'project-{serial}.json'
+
     def save(self, project: Project, expected_revision: str | None = None):
         with self.lock:
             self.assert_revision(expected_revision)
@@ -70,9 +87,9 @@ class Store:
                 # Preserve the previous valid state before replacing; corrupt files are not silently saved over.
                 previous = self.load()
                 self.backups.mkdir(exist_ok=True, mode=0o700)
-                self._atomic_write(self.backups / f'project-{time.time_ns()}.json',
+                self._atomic_write(self._next_backup_path(),
                                    previous.model_dump_json(indent=2))
-                for old in sorted(self.backups.glob('project-*.json'))[:-20]:
+                for old in self._backup_files()[:-20]:
                     old.unlink()
             self._atomic_write(self.path, project.model_dump_json(indent=2))
             return self.revision(project)
@@ -80,7 +97,7 @@ class Store:
     def list_backups(self) -> list[dict]:
         with self.lock:
             return [{'name': p.name, 'size': p.stat().st_size, 'modified_ns': p.stat().st_mtime_ns}
-                    for p in sorted(self.backups.glob('project-*.json'), reverse=True)]
+                    for p in reversed(self._backup_files())]
 
     def storage_hash(self) -> str:
         with self.lock:

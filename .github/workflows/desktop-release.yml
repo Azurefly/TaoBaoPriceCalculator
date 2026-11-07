@@ -71,7 +71,9 @@ jobs:
       - name: Install Python build dependencies
         run: python -m pip install -r requirements-desktop.txt -r requirements-dev.txt
       - name: Run core, API, desktop lifecycle and signing regression tests
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pytest -q
           node --test desktop/tests.cjs desktop/tests-signing.cjs
           node --check desktop/main.cjs
