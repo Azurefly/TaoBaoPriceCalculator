@@ -30,3 +30,24 @@ test('installer does not remove user data or bundle source data directories', ()
   assert.deepEqual(p.build.files, ['main.cjs', 'security.cjs', 'package.json']);
   assert.deepEqual(p.build.extraResources, [{ from: '../dist/TaoBaoPriceCalculator-service', to: 'backend' }]);
 });
+test('fresh profile directory exists before Electron setPath', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const vm = require('node:vm');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tbpc-profile-'));
+  let userData, quit = false;
+  const app = {
+    setName() {}, getPath: name => name === 'appData' ? root : userData,
+    setPath: (name, value) => { assert.ok(fs.statSync(value).isDirectory()); userData = value; },
+    requestSingleInstanceLock: () => false, quit: () => { quit = true; }
+  };
+  try {
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8'), {
+      require: name => name === 'electron' ? { app } : require(name), process, __dirname, console,
+      setTimeout, clearTimeout
+    });
+    assert.equal(userData, path.join(root, 'TaoBaoPriceCalculator'));
+    assert.equal(quit, true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

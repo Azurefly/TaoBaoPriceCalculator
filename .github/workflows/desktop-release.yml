@@ -14,7 +14,7 @@ permissions:
   contents: read
 concurrency:
   group: desktop-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   dependency-lock:
     runs-on: ubuntu-22.04
@@ -140,6 +140,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          HEAD=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+          if [ "$HEAD" != "$GITHUB_SHA" ]; then
+            echo "A newer main commit exists; refusing to publish stale build." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           VERSION=$(node -p "require('./desktop/package.json').version")
           if gh release view "v$VERSION" >/dev/null 2>&1; then
             echo "Version v$VERSION already exists; left unchanged." >> "$GITHUB_STEP_SUMMARY"

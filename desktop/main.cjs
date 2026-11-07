@@ -10,7 +10,9 @@ const { RELEASES, isLocalURL, safeExternal, parseReady } = require('./security.c
 const VERSION = require('./package.json').version;
 app.setName('TaoBaoPriceCalculator');
 // Stable across installers, architectures and application upgrades.
-app.setPath('userData', path.join(app.getPath('appData'), 'TaoBaoPriceCalculator'));
+const profile = path.join(app.getPath('appData'), 'TaoBaoPriceCalculator');
+fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
+app.setPath('userData', profile);
 let window, backend, origin, stopping = false, quitting = false;
 const key = randomBytes(32).toString('hex');
 const smoke = process.env.PROMOPATH_DESKTOP_SMOKE === '1';
@@ -50,6 +52,7 @@ function startBackend() {
       try { const ready = parseReady(line, VERSION); if (ready) { origin = ready; clearTimeout(timer); resolve(); } }
       catch (e) { clearTimeout(timer); reject(e); }
     });
+    backend.stdin.on('error', e => log(`Backend pipe: ${e.message}`));
     backend.stderr.on('data', data => log(data.toString()));
     backend.once('error', e => { clearTimeout(timer); reject(e); });
     backend.once('exit', (code, signal) => {
@@ -126,6 +129,17 @@ else {
       const title = await window.webContents.executeJavaScript('document.title');
       const hasToken = await window.webContents.executeJavaScript('!!document.querySelector("meta[name=local-token]")');
       if (!title || !hasToken) throw new Error('Packaged renderer smoke failed');
+      await window.webContents.executeJavaScript(`new Promise((resolve, reject) => {
+        let attempts = 0;
+        const timer = setInterval(() => {
+          if (document.querySelector('#stats')?.children.length === 4) {
+            clearInterval(timer);
+            if (typeof window.require !== 'undefined' || typeof window.process !== 'undefined')
+              reject(new Error('Unexpected Node capability in renderer'));
+            else resolve(true);
+          } else if (++attempts > 100) { clearInterval(timer); reject(new Error('Frontend initialization timed out')); }
+        }, 100);
+      })`);
       console.log(JSON.stringify({ desktop_smoke: 'passed', version: VERSION, platform: process.platform, arch: process.arch }));
       if (process.env.PROMOPATH_DESKTOP_SMOKE_REPORT)
         fs.writeFileSync(process.env.PROMOPATH_DESKTOP_SMOKE_REPORT, JSON.stringify({ passed: true, version: VERSION, title }));
