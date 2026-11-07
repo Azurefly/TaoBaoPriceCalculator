@@ -62,5 +62,6 @@
   if(!profile) warnings.push('未识别到受支持的购物车商品行；请确认已登录并打开购物车。不会把识别失败当成空购物车。');
   warnings.push('仅包含当前页面已加载的商品；折叠、分页、虚拟滚动中的未加载商品可能遗漏。');
   if(!groups.length) warnings.push('网页未提供可识别的淘宝分组；可先在淘宝手动进入分组，再读取当前页面。按店铺筛选不是淘宝自定义分组。');
-  return {items,groups,active_group_id:active.length===1?active[0].id:null,profile,complete:false,errors,warnings};
+  const loading = [...document.querySelectorAll('[aria-busy="true"], [data-cart-loading="true"]')].some(visible);
+  return {items,groups,loading,active_group_id:active.length===1?active[0].id:null,profile,complete:false,errors,warnings};
 }

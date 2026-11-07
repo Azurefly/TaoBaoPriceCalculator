@@ -11,6 +11,7 @@ from pydantic import Field
 from fastapi import APIRouter, HTTPException, Request
 from .models import Item, Project, StrictModel, utcnow
 from .adapters.browser import money, allowed_url
+from .cart_transition import wait_for_group
 
 
 class ConnectInput(StrictModel):
@@ -141,6 +142,7 @@ class CartService:
             page=await self.browser.page()
             script=(self.root/'app/static/cart-reader.js').read_text('utf-8')
             config=self.browser.config.model_dump()
+            switched_snapshot = None
             if native_group_id:
                 before=await page.evaluate(script,config)
                 group=next((g for g in before.get('groups',[]) if g['id']==native_group_id),None)
@@ -155,9 +157,11 @@ class CartService:
                     if len(matches)!=1: raise ValueError('分组入口不唯一，已停止切换')
                     if await matches[0].get_attribute('role')!='tab': raise ValueError('仅允许切换已识别的分组标签')
                     await matches[0].click(timeout=5000)
-                    await page.wait_for_timeout(600)
-                    await self.browser.page()
-            raw=await page.evaluate(script,config)
+                    async def reread():
+                        checked_page = await self.browser.page()
+                        return await checked_page.evaluate(script,config)
+                    switched_snapshot = await wait_for_group(reread, page.wait_for_timeout, native_group_id, before)
+            raw=switched_snapshot if switched_snapshot is not None else await page.evaluate(script,config)
             if not raw.get('profile'):
                 raise ValueError('当前购物车页面尚未适配，无法确认商品。请使用手动录入；不会将识别失败当成空购物车。')
             if native_group_id and raw.get('active_group_id')!=native_group_id:
