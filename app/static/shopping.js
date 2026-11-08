@@ -52,6 +52,25 @@
     const warnings=[...(snapshot.errors||[]),...(snapshot.warnings||[])];$('capture-note').textContent=`本次页面读取 ${snapshot.items.length} 行，当前筛选 ${rows.length} 行。`+(warnings.length?' '+warnings.join(' '):'');
     count();
   }
+  function renderPlanWithDelete(plan){
+    renderResult(plan);
+    const host=$('result');if(!host)return;
+    const box=el('div',null,'card');
+    box.append(el('h3','删除商品后自动重算'));
+    for(const it of project.items||[]){
+      const row=el('div',null,'hint');
+      row.append(el('span',`${it.title.slice(0,26)} · ¥${((it.pricing_base_cents||0)/100).toFixed(2)}`));
+      const btn=el('button','删除','quiet');
+      btn.onclick=()=>busy('正在删除并重算',async()=>{
+        await api('/api/items/'+encodeURIComponent(it.id),{method:'DELETE'});
+        await loadProject();
+        const r2=await api('/api/shopping/estimate',{method:'POST',body:'{}'});
+        project=r2.project;renderPlanWithDelete(r2);
+      });
+      row.append(btn);box.append(row);
+    }
+    host.append(box);
+  }
   function renderSuggested(){
     const card=$('suggested-card'),box=$('suggested');
     if(!pendingSuggested.length&&!pendingAssets.length){card.hidden=true;box.replaceChildren();return;}
@@ -146,7 +165,7 @@
     const rows=r.snapshot?.items?.length||0;
     message(`一键完成：读取 ${rows} 行，导入 ${r.imported} 件，取到标价 ${got} 件。`,true);
     $('connection-note').textContent=`已连接；本次自动勾选 ${r.selected_by_program||0} 行并已还原。`;
-    tab('offers');
+    if(r.plan){project=r.plan.project;renderPlanWithDelete(r.plan);tab('plan');}else{tab('offers');}
   }));
   $('open-cart').addEventListener('click',()=>busy('正在打开购物车',async()=>{if(demo)throw new Error('体验模式不会连接淘宝。');await api('/api/cart/open',{method:'POST',body:'{}'});}));
   $('read-cart').addEventListener('click',()=>busy('正在读取当前购物车页面',async()=>{if(demo)throw new Error('体验模式使用虚构购物车。');snapshot=null;selection.clear();renderCart();snapshot=await api('/api/cart/read',{method:'POST',body:'{}'});selection.clear();currentGroup='view:current';renderCart();}));

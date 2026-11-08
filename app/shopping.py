@@ -112,6 +112,23 @@ def create_shopping_router(store,browser,root:Path):
             store.save(Project.model_validate(p.model_dump()),rev)
         return {'saved':True}
 
+    @router.delete('/api/items/{item_id}')
+    async def delete_item(item_id:str,request:Request):
+        with store.lock:
+            rev=revision(request);store.assert_revision(rev);p=store.load()
+            if item_id not in {x.id for x in p.items}: raise HTTPException(404,'该商品已不存在')
+            if item_id in p.paid_item_ids(): raise ValueError('不能删除已付款商品')
+            p.items=[x for x in p.items if x.id!=item_id]
+            keep=[]
+            for r in p.rules:
+                touched=set(r.item_ids+r.qualifying_item_ids+r.excluded_item_ids)|set(r.required_item_quantities)
+                if item_id in touched: continue
+                keep.append(r)
+            p.rules=keep
+            p.quotes=[q for q in p.quotes if item_id not in q.item_ids]
+            new=store.save(Project.model_validate(p.model_dump()),rev)
+        return {'deleted':True,'revision':new,'items':len(p.items)}
+
     @router.post('/api/promotions/explain')
     async def explain(body:GroupInput):
         p=store.load()

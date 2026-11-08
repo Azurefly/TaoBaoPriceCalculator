@@ -373,9 +373,20 @@ def create_cart_router(store,browser,root:Path):
                         item.deposit_confirmed = True
                         if item.deposit_paid_cents is None:
                             item.deposit_paid_cents = 0
+                # 自动采用识别到的优惠（失败忽略，不影响导入）
+                for draft in drafts:
+                    payload = {k: v for k, v in draft.items() if k != 'scope'}
+                    payload['id'] = f'auto-{len(project.rules)}-{abs(hash(str(payload))) % 100000}'
+                    payload['confirmed'] = True
+                    payload['source_note'] = '购物车页面文案自动识别（已自动采用）'
+                    try:
+                        project.rules = [x for x in project.rules if x.id != payload['id']] + [Rule(**payload)]
+                    except Exception:
+                        continue
+                project = Project.model_validate(project.model_dump())
                 store.save(project, revision)
                 imported = len(project.items)
-        from .models import Rule as _Rule
+        from .models import Rule, Rule as _Rule
         drafts = suggest(snapshot['items'], snapshot.get('shopTexts') or {},
                          snapshot.get('cartTexts') or [])
         suggested = []
@@ -388,8 +399,21 @@ def create_cart_router(store,browser,root:Path):
                 suggested.append(_Rule(**payload).model_dump(mode='json'))
             except Exception:
                 continue
+        plan = None
+        try:
+            from .pricing import simulate_project
+            from .workflow import compare_strategies
+            from .models import SolveOptions, utcnow
+            current, _rev = store.snapshot()
+            simulated, info = await asyncio.to_thread(simulate_project, current, 300, None, 6)
+            comparison = await asyncio.to_thread(compare_strategies, simulated,
+                SolveOptions(mode='model', starts_at=utcnow(), step_seconds=60, max_seconds=6))
+            plan = {'project': simulated.model_dump(mode='json'), 'comparison': comparison,
+                    'simulation': info, 'model_only': True}
+        except Exception:
+            plan = None
         return {'state': 'ok', 'snapshot': snapshot, 'prices': prices, 'imported': imported,
-                'suggested': suggested, 'assets': assets,
+                'suggested': suggested, 'assets': assets, 'plan': plan,
                 'selected_by_program': selected, 'opened': opened,
                 'reconcile': snapshot.get('reconcile'), 'summary': snapshot.get('summary'),
                 'note': '已自动勾选并还原；标价取自购物车参考价或行价；未提交订单、未付款。'}
