@@ -142,13 +142,13 @@ def test_reconcile_without_detail_is_pending_not_pass():
 
 
 def test_reconcile_row_sum_matches_payable():
-    rows = [{'line_id': 'a', 'selected': True, 'quantity': 1, 'display_price_cents': 3981},
-            {'line_id': 'b', 'selected': True, 'quantity': 2, 'display_price_cents': 33482}]
-    checks = reconcile(_snap(rows=rows))
-    row_check = [c for c in checks if '行价' in c['check']][0]
-    assert row_check['ok'] is False          # 3981 + 66964 ≠ 95486
-    rows[1]['display_price_cents'] = 24541   # 3981 + 2×24541 = 53063，仍不等
-    assert [c for c in reconcile(_snap(rows=rows)) if '行价' in c['check']][0]['ok'] is False
+    # display_price_cents 是行合计（单价×数量），对账时不再乘数量
+    rows = [{'line_id': 'a', 'selected': True, 'quantity': 1, 'display_price_cents': 3981, 'can_import': True},
+            {'line_id': 'b', 'selected': True, 'quantity': 2, 'display_price_cents': 91505, 'can_import': True}]
+    check = [c for c in reconcile(_snap(rows=rows)) if '行价' in c['check']][0]
+    assert check['ok'] is True, check
+    rows[1]['display_price_cents'] = 91504
+    assert [c for c in reconcile(_snap(rows=rows)) if '行价' in c['check']][0]['ok'] is None
 
 
 def test_capture_carries_summary_and_reconcile():

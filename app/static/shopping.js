@@ -82,6 +82,35 @@
     snapshot=null;selection.clear();renderCart();
     $('connection-note').textContent='浏览器已经打开。请本人扫码登录，再点击“我已登录，读取商品”。';
   }));
+  async function autopilotLoop(){
+    for(let attempt=0;attempt<40;attempt+=1){
+      const r=await api('/api/cart/autopilot',{method:'POST',body:'{}'});
+      if(r.state==='ok')return r;
+      if(r.state==='need_login'){
+        $('connection-note').textContent='请在浏览器里用手机淘宝扫码；扫码完成后会自动继续，不用再点按钮。';
+        await new Promise(done=>setTimeout(done,3000));
+        continue;
+      }
+      if(r.state==='browser_closed'){
+        $('connection-note').textContent=r.hint;
+        await new Promise(done=>setTimeout(done,1500));
+        continue;
+      }
+      return r;
+    }
+    throw new Error('等待扫码超时，请再点一次「一键读取并导入」。');
+  }
+  $('autopilot').addEventListener('click',()=>busy('正在一键读取：会打开浏览器、自动勾选、读取优惠明细（若需扫码会自动等待）',async()=>{
+    if(demo)throw new Error('体验模式不连接淘宝。');
+    const r=await autopilotLoop();
+    snapshot=r.snapshot||null;selection.clear();currentGroup='view:current';
+    await loadProject();renderCart();renderOffers();
+    const got=Object.values(r.prices||{}).filter(x=>x&&x.cents).length;
+    const rows=r.snapshot?.items?.length||0;
+    message(`一键完成：读取 ${rows} 行，导入 ${r.imported} 件，取到标价 ${got} 件。`,true);
+    $('connection-note').textContent=`已连接；本次自动勾选 ${r.selected_by_program||0} 行并已还原。`;
+    tab('offers');
+  }));
   $('open-cart').addEventListener('click',()=>busy('正在打开购物车',async()=>{if(demo)throw new Error('体验模式不会连接淘宝。');await api('/api/cart/open',{method:'POST',body:'{}'});}));
   $('read-cart').addEventListener('click',()=>busy('正在读取当前购物车页面',async()=>{if(demo)throw new Error('体验模式使用虚构购物车。');snapshot=null;selection.clear();renderCart();snapshot=await api('/api/cart/read',{method:'POST',body:'{}'});selection.clear();currentGroup='view:current';renderCart();}));
   $('disconnect').addEventListener('click',()=>busy('正在断开连接',async()=>{if(demo)throw new Error('体验模式没有连接淘宝。');const r=await api('/api/cart/disconnect',{method:'POST',body:'{}'});snapshot=null;selection.clear();$('consent').checked=false;renderCart();$('connection-note').textContent=r.note;}));

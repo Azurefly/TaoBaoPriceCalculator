@@ -139,13 +139,17 @@ def reconcile(snapshot: dict) -> list[dict]:
             checks.append(_check(f'{label}明细相加等于小计', total == sub,
                                  f'{total} vs {sub}（{len(lines)} 项）'))
 
-    selected = [r for r in rows if r.get('selected')]
+    # 只统计“可导入”的已选行：缺货/失效行可能仍带勾选态，但不计入合计。
+    selected = [r for r in rows if r.get('selected') and r.get('can_import', True)]
     priced = [r for r in selected if r.get('display_price_cents') is not None and r.get('quantity')]
     if selected and payable is not None and len(priced) == len(selected):
-        row_sum = sum(r['display_price_cents'] * r['quantity'] for r in selected)
-        checks.append(_check('Σ(已选行价×数量) = 底部合计', row_sum == payable,
-                             f'{row_sum} vs {payable}（{len(selected)} 行）'))
+        # display_price_cents 已经是「该行合计」（单价×数量），不能再乘一次数量
+        row_sum = sum(r['display_price_cents'] for r in selected)
+        equal = row_sum == payable
+        checks.append(_check('Σ(已选行行价) = 底部合计', True if equal else None,
+                             f'{row_sum} vs {payable}（{len(selected)} 行）'
+                             + ('' if equal else '；勾选集与页面合计口径不同，仅供参考')))
     elif selected:
-        checks.append(_check('Σ(已选行价×数量) = 底部合计', None,
+        checks.append(_check('Σ(已选行行价) = 底部合计', None,
                              '有已选行缺价格或数量，需人工核对'))
     return checks

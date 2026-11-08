@@ -9,6 +9,7 @@ import asyncio
 import os
 import re
 import uuid
+import json
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import urlparse
@@ -73,6 +74,9 @@ class BrowserAdapter:
         self.last_trial = 0.0
         self.config = BrowserConfig()
         self.local_consent = False
+        # 参考通行的 storage_state 方案：登录一次后把会话快照落盘，
+        # profile 丢失或换机时可以直接恢复，不用重新扫码。
+        self.state_path = data_dir / 'browser-state.json'
 
     def permitted(self) -> bool:
         """Compatibility name: local user consent only, NOT platform permission."""
@@ -97,12 +101,32 @@ class BrowserAdapter:
         try:
             profile = self.data_dir / 'browser-profile'
             profile.mkdir(parents=True, exist_ok=True, mode=0o700)
+            # 上一轮被强杀时 Chrome 会留下 SingletonLock，导致之后一律“打不开浏览器”。
+            # 只在占用进程已不存在时清掉，避免打断真正在用的窗口。
+            lock = profile / 'SingletonLock'
+            try:
+                if lock.is_symlink() or lock.exists():
+                    target = os.readlink(lock) if lock.is_symlink() else ''
+                    pid = int(target.rsplit('-', 1)[-1]) if '-' in target else 0
+                    alive = False
+                    if pid:
+                        try:
+                            os.kill(pid, 0)
+                            alive = True
+                        except OSError:
+                            alive = False
+                    if not alive:
+                        lock.unlink()
+            except Exception:
+                pass
             channel = os.getenv('PROMOPATH_BROWSER_CHANNEL', '').strip()
             if channel and channel not in ('chrome', 'msedge'):
                 raise ValueError('浏览器channel只允许chrome或msedge')
             choices = list(dict.fromkeys(([channel] if channel else []) + ['chrome', 'msedge', '']))
             for candidate in choices:
                 try:
+                    # 注意：launch_persistent_context 不接受 storage_state 参数
+                    # （会 TypeError，导致所有 channel 都启动失败），这里改为启动后注入 Cookie。
                     self.context = await self.pw.chromium.launch_persistent_context(str(profile), headless=False,
                         chromium_sandbox=True, viewport={'width': 1380, 'height': 940}, accept_downloads=False,
                         **({'channel': candidate} if candidate else {}))
@@ -111,6 +135,15 @@ class BrowserAdapter:
                     continue
             if not self.context:
                 raise ValueError('未能打开浏览器。请安装Chrome或Edge，并关闭使用同一工具登录资料的窗口后重试。')
+            # 会话快照恢复：profile 被清掉或换机时，凭上次登录的 Cookie 直接恢复登录态。
+            if self.state_path.exists():
+                try:
+                    state = json.loads(self.state_path.read_text('utf-8'))
+                    cookies = state.get('cookies') or []
+                    if cookies:
+                        await self.context.add_cookies(cookies)
+                except Exception:
+                    pass
             opened_context = self.context
             def closed():
                 if self.context is opened_context:
@@ -128,6 +161,29 @@ class BrowserAdapter:
             self.local_consent = False
             raise
         return {'opened': True, 'note': '请在打开的浏览器中自行扫码登录；程序不读取密码或支付凭证。'}
+
+    async def save_state(self) -> bool:
+        """登录成功后存一份会话快照（仅本机，含 Cookie，已被 .gitignore 覆盖）。"""
+        if not self.context:
+            return False
+        try:
+            await self.context.storage_state(path=str(self.state_path))
+            try:
+                self.state_path.chmod(0o600)
+            except OSError:
+                pass
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def logged_in(page) -> bool:
+        """只看域名判断是否已离开登录页，不发请求。"""
+        try:
+            host = urlparse(page.url).hostname or ''
+        except Exception:
+            return False
+        return bool(host) and not re.search(r'(^|\.)(login|passport)\.', host)
 
     async def close(self):
         # Revoke permission before awaiting close; new actions cannot start.

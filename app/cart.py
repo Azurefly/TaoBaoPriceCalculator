@@ -13,6 +13,7 @@ from .models import Item, Project, StrictModel, utcnow
 from .adapters.browser import money, allowed_url
 from .cart_transition import wait_for_group
 from .cart_reconcile import parse_discount_detail, reconcile, to_cents
+from . import autopilot
 
 
 class ConnectInput(StrictModel):
@@ -260,6 +261,121 @@ def create_cart_router(store,browser,root:Path):
             project=imported_project(store.load(),snap,body)
             new_revision=store.save(project,revision)
         return {'saved':True,'revision':new_revision,'item_count':len(project.items)}
+
+    @router.post('/api/cart/autopilot')
+    async def autopilot_run():
+        """一键：开浏览器 → 等登录 → 全选 → 读明细 → 读行 → 取标价 → 导入。
+
+        登录按通行做法处理：短等不到就返回 state='need_login'（不是报错），
+        前端拿到后自动轮询重试；登录成功即保存 storage_state，下次免扫码。
+        只做勾选 / 开优惠明细 两类非交易操作；不点立即购买、结算、提交、付款。
+        """
+
+        def need_login(url: str) -> dict:
+            return {'state': 'need_login', 'login_url': url,
+                    'hint': '请在打开的浏览器里用手机淘宝扫码；扫码完成后本页会自动继续，不需要再点按钮。'}
+
+        try:
+            async with browser.lock:
+                opened = False
+                if not browser.context:
+                    await browser.launch(local_consent=True)
+                    opened = True
+                if not browser.context.pages:
+                    raise ValueError('浏览器没有可用页面')
+                page = browser.context.pages[-1]
+                if 'taobao.com' not in page.url and 'tmall.com' not in page.url:
+                    await page.goto('https://cart.taobao.com/cart.htm', wait_until='domcontentloaded', timeout=45000)
+                if not await autopilot.wait_login(page, browser):
+                    return need_login(page.url)
+                page = await browser.page()
+                if 'cart.taobao.com' not in page.url:
+                    await page.goto('https://cart.taobao.com/cart.htm', wait_until='domcontentloaded', timeout=45000)
+                await autopilot.wait_rows(page)
+
+                boxes = page.locator('div.trade-cart-item-info input.ant-checkbox-input')
+                before = []
+                for i in range(await boxes.count()):
+                    try:
+                        before.append(await boxes.nth(i).is_checked())
+                    except Exception:
+                        before.append(False)
+
+                selected = await autopilot.select_all_rows(page)
+                await page.wait_for_timeout(2500)
+                detail_raw = await autopilot.read_discount_detail(page)
+                await page.wait_for_timeout(800)
+                script = (root / 'app/static/cart-reader.js').read_text('utf-8')
+                raw = await page.evaluate(script, browser.config.model_dump())
+                raw['detail_raw'] = detail_raw
+
+                for i, was_checked in enumerate(before):
+                    if not was_checked:
+                        try:
+                            box = boxes.nth(i)
+                            if await box.is_checked():
+                                await box.uncheck(timeout=3000)
+                        except Exception:
+                            pass
+
+                if not raw.get('profile'):
+                    raise ValueError('当前购物车页面尚未适配，无法一键读取')
+                snapshot = normalized_capture(raw, service.connection_id)
+                service.snapshot = snapshot
+                await browser.save_state()
+        except Exception as error:
+            text = str(error)
+            if 'has been closed' in text or 'Target page' in text:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+                return {'state': 'browser_closed',
+                            'hint': '浏览器窗口被关掉了，已重置连接；再点一次「一键读取并导入」即可（通常不需要重新扫码）。'}
+            raise
+
+        prices = {}
+        for row in snapshot['items']:
+            if not row.get('can_import'):
+                continue
+            label = str(row.get('price_label') or '')
+            ref = str(row.get('reference_price_text') or '').strip()
+            qty = row.get('quantity') or 1
+            if '定金' in label:
+                prices[row['line_id']] = {'cents': None, 'note': '预售定金行：标价与尾款需详情页核对'}
+            elif ref and row.get('display_price_cents') is not None:
+                unit = to_cents(ref)
+                prices[row['line_id']] = ({'cents': unit * qty, 'note': f'购物车参考价 ¥{ref}×{qty}'}
+                                          if unit else {'cents': None, 'note': '参考价解析失败'})
+            elif row.get('display_price_cents') is not None:
+                prices[row['line_id']] = {'cents': row['display_price_cents'],
+                                          'note': '购物车行价（无平台加补标签，视作标价）'}
+            else:
+                prices[row['line_id']] = {'cents': None, 'note': '缺少价格'}
+
+        wanted = [r['line_id'] for r in snapshot['items'] if r.get('can_import')]
+        imported = 0
+        if wanted:
+            _, revision = store.snapshot()
+            with store.lock:
+                project = store.load()
+                body = ImportInput(snapshot_id=snapshot['snapshot_id'], line_ids=wanted,
+                                   group_id='view:current', account_confirmed=True, replace_existing=True)
+                project = imported_project(project, snapshot, body)
+                for item in project.items:
+                    info = prices.get(item.source_line_id or '')
+                    if info and info.get('cents'):
+                        item.pricing_base_cents = info['cents']
+                        item.pricing_base_evidence = f'一键读取：{info.get("note","")}'
+                        item.deposit_confirmed = True
+                        if item.deposit_paid_cents is None:
+                            item.deposit_paid_cents = 0
+                store.save(project, revision)
+                imported = len(project.items)
+        return {'state': 'ok', 'snapshot': snapshot, 'prices': prices, 'imported': imported,
+                'selected_by_program': selected, 'opened': opened,
+                'reconcile': snapshot.get('reconcile'), 'summary': snapshot.get('summary'),
+                'note': '已自动勾选并还原；标价取自购物车参考价或行价；未提交订单、未付款。'}
 
     @router.post('/api/cart/disconnect')
     async def disconnect():
