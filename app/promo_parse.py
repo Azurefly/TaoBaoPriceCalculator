@@ -103,8 +103,8 @@ def suggest(rows: list[dict], shop_texts: dict[str, list[str]], cart_texts: list
     # 同一档位去重（跨店文案常重复出现在多行）
     uniq, seen = [], set()
     for item in found:
-        key = (item['kind'], item['threshold_cents'], item['amount_cents'], item.get('discount_bps', 0),
-               tuple(item.get('shop_ids') or []))
+        key = (item.get('kind'), item.get('threshold_cents', 0), item.get('amount_cents', 0),
+               item.get('discount_bps', 0), tuple(item.get('shop_ids') or []))
         if key in seen:
             continue
         seen.add(key)

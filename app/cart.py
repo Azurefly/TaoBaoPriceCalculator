@@ -373,16 +373,6 @@ def create_cart_router(store,browser,root:Path):
                         item.deposit_confirmed = True
                         if item.deposit_paid_cents is None:
                             item.deposit_paid_cents = 0
-                # 自动采用识别到的优惠（失败忽略，不影响导入）
-                for draft in drafts:
-                    payload = {k: v for k, v in draft.items() if k != 'scope'}
-                    payload['id'] = f'auto-{len(project.rules)}-{abs(hash(str(payload))) % 100000}'
-                    payload['confirmed'] = True
-                    payload['source_note'] = '购物车页面文案自动识别（已自动采用）'
-                    try:
-                        project.rules = [x for x in project.rules if x.id != payload['id']] + [Rule(**payload)]
-                    except Exception:
-                        continue
                 project = Project.model_validate(project.model_dump())
                 store.save(project, revision)
                 imported = len(project.items)
@@ -399,6 +389,26 @@ def create_cart_router(store,browser,root:Path):
                 suggested.append(_Rule(**payload).model_dump(mode='json'))
             except Exception:
                 continue
+        if suggested:
+            try:
+                _, rev2 = store.snapshot()
+                with store.lock:
+                    cur = store.load()
+                    added = []
+                    for draft in suggested:
+                        payload = {k: v for k, v in draft.items() if k != 'scope'}
+                        payload['confirmed'] = True
+                        payload['source_note'] = '购物车页面文案自动识别（已自动采用）'
+                        try:
+                            added.append(Rule(**payload))
+                        except Exception:
+                            continue
+                    if added:
+                        cur.rules = [x for x in cur.rules if x.id not in {r.id for r in added}] + added
+                        cur = Project.model_validate(cur.model_dump())
+                        store.save(cur, rev2)
+            except Exception:
+                pass
         plan = None
         try:
             from .pricing import simulate_project
