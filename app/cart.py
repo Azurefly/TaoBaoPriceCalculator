@@ -389,6 +389,9 @@ def create_cart_router(store,browser,root:Path):
                 suggested.append(_Rule(**payload).model_dump(mode='json'))
             except Exception:
                 continue
+        detail = (snapshot.get('summary') or {}).get('detail') or {}
+        assets = parse_assets(snapshot.get('cartTexts') or [],
+                              (detail.get('shop_lines') or []) + (detail.get('platform_lines') or []))
         if suggested:
             try:
                 _, rev2 = store.snapshot()
@@ -401,7 +404,8 @@ def create_cart_router(store,browser,root:Path):
                         payload['source_note'] = '购物车页面文案自动识别（已自动采用）'
                         try:
                             added.append(Rule(**payload))
-                        except Exception:
+                        except Exception as error:
+                            service.last_error = f'rule adopt failed: {error}'
                             continue
                     if added:
                         cur.rules = [x for x in cur.rules if x.id not in {r.id for r in added}] + added
