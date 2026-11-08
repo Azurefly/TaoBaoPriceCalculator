@@ -104,6 +104,18 @@
       group_ids:active.length===1?[active[0].id]:[],group_names:active.length===1?[active[0].name]:[],
       observed_promotions:promotion,disabled:row.getAttribute('data-disabled')==='true'||row.getAttribute('aria-disabled')==='true'});
   }
+  // 店铺头部与跨店/消费券提示：这些是“规则文本”，用来生成规则草稿
+  const shopTexts = {};
+  for (const shop of [...document.querySelectorAll('[class*="trade-cart-shop-container"]')].filter(visible)) {
+    const sid = (shop.getAttribute('id') || '').replace(/^bundle_s_/, '') || 'unknown';
+    shopTexts[sid] = (shop.innerText || '').trim().slice(0, 300);
+  }
+  const cartTexts = [];
+  const bar = [...document.querySelectorAll('div')].filter(visible)
+    .filter(e => /合计/.test(e.innerText || '') && (e.innerText || '').length < 400).pop();
+  if (bar) cartTexts.push(bar.innerText.trim().slice(0, 300));
+  for (const tab of [...document.querySelectorAll('[class*="filterTabs"]')].filter(visible))
+    cartTexts.push(tab.innerText.trim().slice(0, 200));
   // 底部合计：totalPrice 是拆分节点，需先去掉空白再取金额
   const moneyIn = raw => { const m = String(raw||'').replace(/\s/g,'').match(/(\d{1,7}(?:\.\d{1,2})?)/); return m ? m[1] : ''; };
   const totalNode = [...document.querySelectorAll('[class*="totalPrice"]')].filter(visible)[0] || null;
@@ -124,5 +136,5 @@
   warnings.push('仅包含当前页面已加载的商品；折叠、分页、虚拟滚动中的未加载商品可能遗漏。');
   if(!groups.length) warnings.push('网页未提供可识别的淘宝分组；可先在淘宝手动进入分组，再读取当前页面。按店铺筛选不是淘宝自定义分组。');
   const loading = [...document.querySelectorAll('[aria-busy="true"], [data-cart-loading="true"]')].some(visible);
-  return {items,groups,loading,active_group_id:active.length===1?active[0].id:null,profile,complete:false,errors,warnings,summary,detail_raw};
+  return {items,groups,loading,active_group_id:active.length===1?active[0].id:null,profile,complete:false,errors,warnings,summary,detail_raw,shopTexts,cartTexts};
 }

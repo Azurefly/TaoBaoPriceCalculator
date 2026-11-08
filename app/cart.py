@@ -14,6 +14,7 @@ from .adapters.browser import money, allowed_url
 from .cart_transition import wait_for_group
 from .cart_reconcile import parse_discount_detail, reconcile, to_cents
 from . import autopilot
+from .promo_parse import parse_assets, suggest
 
 
 class ConnectInput(StrictModel):
@@ -321,6 +322,8 @@ def create_cart_router(store,browser,root:Path):
                 if not raw.get('profile'):
                     raise ValueError('当前购物车页面尚未适配，无法一键读取')
                 snapshot = normalized_capture(raw, service.connection_id)
+                snapshot['shopTexts'] = raw.get('shopTexts') or {}
+                snapshot['cartTexts'] = raw.get('cartTexts') or []
                 service.snapshot = snapshot
                 await browser.save_state()
         except Exception as error:
@@ -372,7 +375,21 @@ def create_cart_router(store,browser,root:Path):
                             item.deposit_paid_cents = 0
                 store.save(project, revision)
                 imported = len(project.items)
+        from .models import Rule as _Rule
+        drafts = suggest(snapshot['items'], snapshot.get('shopTexts') or {},
+                         snapshot.get('cartTexts') or [])
+        suggested = []
+        for index, draft in enumerate(drafts):
+            payload = {k: v for k, v in draft.items() if k != 'scope'}
+            payload['id'] = f'auto-{index}-' + hashlib.sha256(
+                f"{payload['kind']}-{payload.get('threshold_cents')}-{payload.get('amount_cents')}-"
+                f"{payload.get('discount_bps')}-{payload.get('shop_ids')}".encode()).hexdigest()[:8]
+            try:
+                suggested.append(_Rule(**payload).model_dump(mode='json'))
+            except Exception:
+                continue
         return {'state': 'ok', 'snapshot': snapshot, 'prices': prices, 'imported': imported,
+                'suggested': suggested, 'assets': assets,
                 'selected_by_program': selected, 'opened': opened,
                 'reconcile': snapshot.get('reconcile'), 'summary': snapshot.get('summary'),
                 'note': '已自动勾选并还原；标价取自购物车参考价或行价；未提交订单、未付款。'}

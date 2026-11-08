@@ -2,6 +2,8 @@
 (() => {
   const $ = id => document.getElementById(id);
   const token = document.querySelector('meta[name="local-token"]').content;
+  let pendingSuggested = [];
+  let pendingAssets = [];
   let project = {items:[],rules:[]}, revision='', snapshot=null, demo=false, demoData=null, selection=new Set(), currentGroup='view:current', editingBase=null;
   const money = value => value == null ? '待核对' : '¥'+(value/100).toFixed(2);
   const el = (tag,text,cls) => {const n=document.createElement(tag);if(text!=null)n.textContent=text;if(cls)n.className=cls;return n;};
@@ -49,6 +51,31 @@
     renderReconcile();
     const warnings=[...(snapshot.errors||[]),...(snapshot.warnings||[])];$('capture-note').textContent=`本次页面读取 ${snapshot.items.length} 行，当前筛选 ${rows.length} 行。`+(warnings.length?' '+warnings.join(' '):'');
     count();
+  }
+  function renderSuggested(){
+    const card=$('suggested-card'),box=$('suggested');
+    if(!pendingSuggested.length&&!pendingAssets.length){card.hidden=true;box.replaceChildren();return;}
+    card.hidden=false;box.replaceChildren();
+    if(pendingAssets.length){
+      box.append(el('h3','你的券与红包'));
+      for(const a of pendingAssets){
+        const bits=[a.name,a.available?`可用 ${a.available}`:'本次已用',
+          a.face_total_cents?('面额合计 ¥'+(a.face_total_cents/100).toFixed(2)):'',
+          a.used_cents?('已抵 ¥'+(a.used_cents/100).toFixed(2)):'',
+          a.gap_cents?('再实付 ¥'+(a.gap_cents/100).toFixed(2)+' 可达门槛'):'',
+          a.note||''].filter(Boolean);
+        box.append(el('div',bits.join(' · '),'hint'));
+      }
+      const withRule=pendingAssets.filter(a=>a.rule).length;
+      box.append(el('div',`其中 ${withRule} 条可直接转成规则（点「全部采用」一起加入）`,'hint'));
+    }
+    for(const r of pendingSuggested){
+      const bits=[r.name,r.shop_ids&&r.shop_ids.length?('店铺 '+r.shop_ids.join('/')):'跨店/全场',
+        r.threshold_cents?('门槛 ¥'+(r.threshold_cents/100).toFixed(2)):'',
+        r.amount_cents?('减 ¥'+(r.amount_cents/100).toFixed(2)):'',
+        r.discount_bps?((10-r.discount_bps/1000)+'折'):''].filter(Boolean);
+      box.append(el('div',bits.join(' · '),'hint'));
+    }
   }
   function renderReconcile(){
     const box=$('cart-reconcile'),rows=snapshot?.reconcile||[],summary=snapshot?.summary||{};
@@ -100,11 +127,21 @@
     }
     throw new Error('等待扫码超时，请再点一次「一键读取并导入」。');
   }
+  $('adopt-suggested').addEventListener('click',()=>busy('正在采用识别到的优惠',async()=>{
+    let adopted=0;
+    for(const asset of pendingAssets){ if(asset.rule) pendingSuggested.push({...asset.rule,id:'auto-asset-'+Math.random().toString(16).slice(2,10)}); }
+    for(const rule of pendingSuggested){
+      try{await api('/api/promotions',{method:'POST',body:JSON.stringify({rule:{...rule,confirmed:true,source_note:'购物车页面文案自动识别（已采用）'},is_coupon:false,available:1})});adopted+=1;}catch(e){}
+    }
+    pendingSuggested=[];renderSuggested();await loadProject();renderOffers();
+    message(`已采用 ${adopted} 条优惠规则。`,true);
+  }));
   $('autopilot').addEventListener('click',()=>busy('正在一键读取：会打开浏览器、自动勾选、读取优惠明细（若需扫码会自动等待）',async()=>{
     if(demo)throw new Error('体验模式不连接淘宝。');
     const r=await autopilotLoop();
     snapshot=r.snapshot||null;selection.clear();currentGroup='view:current';
     await loadProject();renderCart();renderOffers();
+    pendingSuggested=r.suggested||[];pendingAssets=r.assets||[];renderSuggested();
     const got=Object.values(r.prices||{}).filter(x=>x&&x.cents).length;
     const rows=r.snapshot?.items?.length||0;
     message(`一键完成：读取 ${rows} 行，导入 ${r.imported} 件，取到标价 ${got} 件。`,true);
