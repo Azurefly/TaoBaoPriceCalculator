@@ -61,13 +61,14 @@
       const shopBox = row.closest('[class*="trade-cart-shop-container"]') || row;
       const rowShopId = (shopBox.getAttribute('id') || '').replace(/^bundle_s_/, '');
       const rowShopName = text(shopBox.querySelector('[class*="shopName"], [class*="shop-name"]'));
+      const rowText = (row.innerText || '').trim().slice(0, 1600);
       const promos = (row.innerText || '').split(/\n+/).map(s=>s.trim())
         .filter(t=>t && t.length<=40 && /官方立减|消费券|补贴|礼金|满减|券|直降/.test(t)).slice(0,10);
       const rowBox = row.querySelector('input[type=checkbox]');
       items.push({line_id: rowLine, product_id: product, title: rowTitle.slice(0,400), sku: '', quantity: rowQty,
         shop_id: rowShopId, shop_name: rowShopName.slice(0,160),
         display_price_text: priceText.slice(0,80), price_scope: priceText ? 'unit' : 'unknown',
-        price_label: priceLabel, reference_price_text: refText.slice(0,80),
+        price_label: priceLabel, reference_price_text: refText.slice(0,80), row_text: rowText,
         group_ids: [], group_names: [], observed_promotions: promos,
         selected: !!rowBox?.checked,
         // 原生 checkbox 在多数可购买行上也带 disabled（渲染态），不能据此判断不可买；

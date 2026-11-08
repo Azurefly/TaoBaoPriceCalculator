@@ -265,17 +265,14 @@ def create_cart_router(store,browser,root:Path):
 
     @router.post('/api/cart/autopilot')
     async def autopilot_run():
-        """一键：开浏览器 → 等登录 → 全选 → 读明细 → 读行 → 取标价 → 导入。
+        """扫码后直接返回当前勾选商品的方案；保留勾选，不代下单、不付款。
 
-        登录按通行做法处理：短等不到就返回 state='need_login'（不是报错），
-        前端拿到后自动轮询重试；登录成功即保存 storage_state，下次免扫码。
-        只做勾选 / 开优惠明细 两类非交易操作；不点立即购买、结算、提交、付款。
+        购物车行价是已分摊优惠后的行实付，故只把它当作方案金额，不再次扣减
+        页面上已经计入的官方立减/店铺券。规则文案只展示，不自动用于二次扣款。
         """
-
         def need_login(url: str) -> dict:
             return {'state': 'need_login', 'login_url': url,
-                    'hint': '请在打开的浏览器里用手机淘宝扫码；扫码完成后本页会自动继续，不需要再点按钮。'}
-
+                    'hint': '请在浏览器里扫码；完成后本页自动继续，不需要再点按钮。'}
         try:
             async with browser.lock:
                 opened = False
@@ -294,33 +291,25 @@ def create_cart_router(store,browser,root:Path):
                     await page.goto('https://cart.taobao.com/cart.htm', wait_until='domcontentloaded', timeout=45000)
                 await autopilot.wait_rows(page)
 
+                # 尊重用户已勾选的商品。只有一行都没选时才自动全选可购买商品。
                 boxes = page.locator('div.trade-cart-item-info input.ant-checkbox-input')
-                before = []
+                selected_before = 0
                 for i in range(await boxes.count()):
                     try:
-                        before.append(await boxes.nth(i).is_checked())
+                        selected_before += bool(await boxes.nth(i).is_checked())
                     except Exception:
-                        before.append(False)
-
-                selected = await autopilot.select_all_rows(page)
-                await page.wait_for_timeout(2500)
+                        pass
+                auto_selected = 0
+                if not selected_before:
+                    auto_selected = await autopilot.select_all_rows(page)
+                await page.wait_for_timeout(2200)
                 detail_raw = await autopilot.read_discount_detail(page)
-                await page.wait_for_timeout(800)
+                await page.wait_for_timeout(500)
                 script = (root / 'app/static/cart-reader.js').read_text('utf-8')
                 raw = await page.evaluate(script, browser.config.model_dump())
                 raw['detail_raw'] = detail_raw
-
-                for i, was_checked in enumerate(before):
-                    if not was_checked:
-                        try:
-                            box = boxes.nth(i)
-                            if await box.is_checked():
-                                await box.uncheck(timeout=3000)
-                        except Exception:
-                            pass
-
                 if not raw.get('profile'):
-                    raise ValueError('当前购物车页面尚未适配，无法一键读取')
+                    raise ValueError('当前购物车页面尚未适配，无法读取')
                 snapshot = normalized_capture(raw, service.connection_id)
                 snapshot['shopTexts'] = raw.get('shopTexts') or {}
                 snapshot['cartTexts'] = raw.get('cartTexts') or []
@@ -334,103 +323,82 @@ def create_cart_router(store,browser,root:Path):
                 except Exception:
                     pass
                 return {'state': 'browser_closed',
-                            'hint': '浏览器窗口被关掉了，已重置连接；再点一次「一键读取并导入」即可（通常不需要重新扫码）。'}
+                        'hint': '浏览器已关闭，连接已重置；再点一次即可，通常无需重新扫码。'}
             raise
 
-        prices = {}
-        for row in snapshot['items']:
-            if not row.get('can_import'):
-                continue
-            label = str(row.get('price_label') or '')
-            ref = str(row.get('reference_price_text') or '').strip()
-            qty = row.get('quantity') or 1
-            if '定金' in label:
-                prices[row['line_id']] = {'cents': None, 'note': '预售定金行：标价与尾款需详情页核对'}
-            elif ref and row.get('display_price_cents') is not None:
-                unit = to_cents(ref)
-                prices[row['line_id']] = ({'cents': unit * qty, 'note': f'购物车参考价 ¥{ref}×{qty}'}
-                                          if unit else {'cents': None, 'note': '参考价解析失败'})
-            elif row.get('display_price_cents') is not None:
-                prices[row['line_id']] = {'cents': row['display_price_cents'],
-                                          'note': '购物车行价（无平台加补标签，视作标价）'}
-            else:
-                prices[row['line_id']] = {'cents': None, 'note': '缺少价格'}
-
+        selected_lines = [r['line_id'] for r in snapshot['items']
+                          if r.get('selected') and r.get('can_import')]
         wanted = [r['line_id'] for r in snapshot['items'] if r.get('can_import')]
-        imported = 0
-        if wanted:
-            _, revision = store.snapshot()
-            with store.lock:
-                project = store.load()
-                body = ImportInput(snapshot_id=snapshot['snapshot_id'], line_ids=wanted,
-                                   group_id='view:current', account_confirmed=True, replace_existing=True)
-                project = imported_project(project, snapshot, body)
-                for item in project.items:
-                    info = prices.get(item.source_line_id or '')
-                    if info and info.get('cents'):
-                        item.pricing_base_cents = info['cents']
-                        item.pricing_base_evidence = f'一键读取：{info.get("note","")}'
-                        item.deposit_confirmed = True
-                        if item.deposit_paid_cents is None:
-                            item.deposit_paid_cents = 0
-                project = Project.model_validate(project.model_dump())
-                store.save(project, revision)
-                imported = len(project.items)
-        from .models import Rule, Rule as _Rule
-        drafts = suggest(snapshot['items'], snapshot.get('shopTexts') or {},
-                         snapshot.get('cartTexts') or [])
+        if not wanted:
+            raise ValueError('当前没有可导入的商品')
+        deferred = [{'line_id': r['line_id'], 'title': r.get('title'),
+                     'quantity': r.get('quantity'), 'reference_price_text': r.get('reference_price_text')}
+                    for r in snapshot['items'] if '定金' in str(r.get('price_label') or '')]
+        deferred_lines = {x['line_id'] for x in deferred}
+        _, revision = store.snapshot()
+        with store.lock:
+            project = store.load()
+            body = ImportInput(snapshot_id=snapshot['snapshot_id'], line_ids=wanted,
+                               group_id='view:current', account_confirmed=True, replace_existing=True)
+            project = imported_project(project, snapshot, body)
+            # 每次以当前购物车为准，移除已不在页面中的旧行与旧自动规则。
+            current_ids = {r['id'] for r in snapshot['items']}
+            project.items = [it for it in project.items if it.id in current_ids]
+            project.rules = [r for r in project.rules
+                             if not r.id.startswith('auto-') and '自动识别' not in r.source_note]
+            for item in project.items:
+                is_selected = item.source_line_id in selected_lines
+                item.calculation_state = ('presale_pending' if item.source_line_id in deferred_lines
+                                          else 'selected' if is_selected else 'unselected')
+                item.required = is_selected and item.source_line_id not in deferred_lines
+                if item.source_line_id in deferred_lines:
+                    item.required = False
+                    item.pricing_base_cents = None
+                    item.pricing_base_evidence = '预售：需详情页核对尾款与定金口径'
+                    item.deposit_confirmed = False
+                    item.deposit_paid_cents = None
+                else:
+                    # 行实付就是本次计算金额，不从参考价重建，也不重复扣官方立减。
+                    item.pricing_base_cents = item.display_price_cents
+                    item.pricing_base_evidence = '购物车行实付（已分摊优惠；未再重复扣券）'
+                    item.deposit_confirmed = item.pricing_base_cents is not None
+                    item.deposit_paid_cents = 0 if item.deposit_confirmed else None
+            project = Project.model_validate(project.model_dump())
+            store.save(project, revision)
+
+        # 文案与券包用于展示和后续核对，不自动变成会再次扣款的规则。
+        drafts = suggest([r for r in snapshot['items'] if r.get('can_import')],
+                         snapshot.get('shopTexts') or {}, snapshot.get('cartTexts') or [])
         suggested = []
         for index, draft in enumerate(drafts):
             payload = {k: v for k, v in draft.items() if k != 'scope'}
-            payload['id'] = f'auto-{index}-' + hashlib.sha256(
-                f"{payload['kind']}-{payload.get('threshold_cents')}-{payload.get('amount_cents')}-"
-                f"{payload.get('discount_bps')}-{payload.get('shop_ids')}".encode()).hexdigest()[:8]
+            payload['id'] = f'draft-{index}'
             try:
-                suggested.append(_Rule(**payload).model_dump(mode='json'))
+                suggested.append(Rule(**payload).model_dump(mode='json'))
             except Exception:
                 continue
         detail = (snapshot.get('summary') or {}).get('detail') or {}
         assets = parse_assets(snapshot.get('cartTexts') or [],
                               (detail.get('shop_lines') or []) + (detail.get('platform_lines') or []))
-        if suggested:
-            try:
-                _, rev2 = store.snapshot()
-                with store.lock:
-                    cur = store.load()
-                    added = []
-                    for draft in suggested:
-                        payload = {k: v for k, v in draft.items() if k != 'scope'}
-                        payload['confirmed'] = True
-                        payload['source_note'] = '购物车页面文案自动识别（已自动采用）'
-                        try:
-                            added.append(Rule(**payload))
-                        except Exception as error:
-                            service.last_error = f'rule adopt failed: {error}'
-                            continue
-                    if added:
-                        cur.rules = [x for x in cur.rules if x.id not in {r.id for r in added}] + added
-                        cur = Project.model_validate(cur.model_dump())
-                        store.save(cur, rev2)
-            except Exception:
-                pass
         plan = None
         try:
             from .pricing import simulate_project
             from .workflow import compare_strategies
             from .models import SolveOptions, utcnow
-            current, _rev = store.snapshot()
+            current, _ = store.snapshot()
             simulated, info = await asyncio.to_thread(simulate_project, current, 300, None, 6)
             comparison = await asyncio.to_thread(compare_strategies, simulated,
                 SolveOptions(mode='model', starts_at=utcnow(), step_seconds=60, max_seconds=6))
             plan = {'project': simulated.model_dump(mode='json'), 'comparison': comparison,
-                    'simulation': info, 'model_only': True}
-        except Exception:
-            plan = None
-        return {'state': 'ok', 'snapshot': snapshot, 'prices': prices, 'imported': imported,
-                'suggested': suggested, 'assets': assets, 'plan': plan,
-                'selected_by_program': selected, 'opened': opened,
-                'reconcile': snapshot.get('reconcile'), 'summary': snapshot.get('summary'),
-                'note': '已自动勾选并还原；标价取自购物车参考价或行价；未提交订单、未付款。'}
+                    'simulation': info, 'summary': snapshot.get('summary'), 'model_only': True,
+                    'notice': '按购物车已分摊行实付计算；官方立减等没有重复扣减。最终以淘宝结算页为准。'}
+        except Exception as error:
+            plan = {'error': str(error), 'comparison': {'strategies': []}, 'simulation': {'warnings': [str(error)]}}
+        return {'state': 'ok', 'snapshot': snapshot, 'imported': len(project.items),
+                'selected_count': len(selected_lines), 'auto_selected': auto_selected,
+                'suggested': suggested, 'assets': assets, 'deferred': deferred, 'plan': plan,
+                'opened': opened, 'reconcile': snapshot.get('reconcile'), 'summary': snapshot.get('summary'),
+                'note': '按当前勾选商品直接出方案；未提交订单、未付款。'}
 
     @router.post('/api/cart/disconnect')
     async def disconnect():

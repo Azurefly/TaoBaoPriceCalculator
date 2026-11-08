@@ -32,6 +32,8 @@ class Item(StrictModel):
     sku: str = ''
     quantity: int = Field(default=1, ge=1, le=999)
     required: bool = True
+    # 购物车一键导入的显示状态；不改变优化器 required 语义。
+    calculation_state: Literal['selected', 'unselected', 'presale_pending', 'manual'] = 'manual'
     tags: list[str] = Field(default_factory=list)
     display_price_cents: Money | None = None
     display_price_kind: Literal['unknown', 'estimated_total', 'sale_total', 'payable_now'] = 'unknown'

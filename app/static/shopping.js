@@ -4,6 +4,8 @@
   const token = document.querySelector('meta[name="local-token"]').content;
   let pendingSuggested = [];
   let pendingAssets = [];
+  let lastPlan = null;
+  let deferredItems = [];
   let project = {items:[],rules:[]}, revision='', snapshot=null, demo=false, demoData=null, selection=new Set(), currentGroup='view:current', editingBase=null;
   const money = value => value == null ? '待核对' : '¥'+(value/100).toFixed(2);
   const el = (tag,text,cls) => {const n=document.createElement(tag);if(text!=null)n.textContent=text;if(cls)n.className=cls;return n;};
@@ -17,7 +19,12 @@
     $('loading-text').textContent=title;$('loading').hidden=false;message('');
     try{return await fn();}catch(error){message(error.message);}finally{$('loading').hidden=true;}
   }
-  async function loadProject(){const result=await api('/api/project');project=result.project;revision=result.revision;renderOffers();}
+  async function loadProject(){const result=await api('/api/project');project=result.project;revision=result.revision;}
+  function syncOffers(){renderOffers();}
+  async function refreshPlan(){
+    const result=await api('/api/promotions/estimate',{method:'POST',body:'{}'});
+    project=result.project;lastPlan=result;renderPlanWithDelete(result);return result;
+  }
   function tab(name){['cart','offers','plan'].forEach(k=>$(k).hidden=k!==name);document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));history.replaceState(null,'','#'+name);}
   document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>tab(b.dataset.tab)));
   function checkbox(label,value,checked=false){const l=el('label',null,'check'),c=el('input');c.type='checkbox';c.value=value;c.checked=checked;l.append(c,el('span',label));return l;}
@@ -53,21 +60,43 @@
     count();
   }
   function renderPlanWithDelete(plan){
-    renderResult(plan);
+    lastPlan=plan;renderResult(plan);
     const host=$('result');if(!host)return;
     const box=el('div',null,'card');
-    box.append(el('h3','删除商品后自动重算'));
-    for(const it of project.items||[]){
+    box.append(el('h3','本次商品（删除后立即重算）'));
+    const rows=(project.items||[]).filter(it=>it.required);
+    if(!rows.length)box.append(el('p','没有参与本次计算的商品。回到购物车勾选后再读取。','hint'));
+    for(const it of rows){
       const row=el('div',null,'hint');
-      row.append(el('span',`${it.title.slice(0,26)} · ¥${((it.pricing_base_cents||0)/100).toFixed(2)}`));
+      row.append(el('span',`${it.title.slice(0,26)} · ${money(it.pricing_base_cents)}`));
       const btn=el('button','删除','quiet');
       btn.onclick=()=>busy('正在删除并重算',async()=>{
         await api('/api/items/'+encodeURIComponent(it.id),{method:'DELETE'});
-        await loadProject();
-        const r2=await api('/api/shopping/estimate',{method:'POST',body:'{}'});
-        project=r2.project;renderPlanWithDelete(r2);
+        await loadProject();await refreshPlan();
       });
       row.append(btn);box.append(row);
+    }
+    const unselected=(project.items||[]).filter(x=>x.calculation_state==='unselected');
+    if(unselected.length){
+      const d=el('details');d.append(el('summary',`未勾选商品 ${unselected.length} 件（不计入方案）`));
+      for(const it of unselected)d.append(el('p',`${it.title} · ${money(it.pricing_base_cents)}`));box.append(d);
+    }
+    if(deferredItems.length){
+      box.append(el('h3','预售/定金（未纳入本次方案）'));
+      for(const it of deferredItems)box.append(el('p',`${it.title} · ${it.quantity||'?'}件 · 参考总价 ¥${it.reference_price_text||'待核对'}，需详情页确认尾款。`,'notice'));
+    }
+    const detail=lastPlan?.cart?.summary?.detail||lastPlan?.summary?.detail||null;
+    if(detail){
+      const d=el('details');d.append(el('summary','本次已抵扣明细（淘宝页面）'));
+      for(const x of [...(detail.shop_lines||[]),...(detail.platform_lines||[])])d.append(el('p',`${x.label} −${money(x.cents)}`));
+      d.append(el('p',`共减 ${money(detail.total_discount_cents)}`));box.append(d);
+    }
+    if(pendingAssets.length){
+      const d=el('details');d.append(el('summary','你的券与红包'));for(const a of pendingAssets)d.append(el('p',a.name+(a.note?'：'+a.note:'')));box.append(d);
+    }
+    if(pendingSuggested.length){
+      const d=el('details');d.append(el('summary','页面识别到的活动文案（未重复扣款）'));
+      for(const r of pendingSuggested)d.append(el('p',r.name));box.append(d);
     }
     host.append(box);
   }
@@ -152,7 +181,7 @@
     for(const rule of pendingSuggested){
       try{await api('/api/promotions',{method:'POST',body:JSON.stringify({rule:{...rule,confirmed:true,source_note:'购物车页面文案自动识别（已采用）'},is_coupon:false,available:1})});adopted+=1;}catch(e){}
     }
-    pendingSuggested=[];renderSuggested();await loadProject();renderOffers();
+    pendingSuggested=[];renderSuggested();await loadProject();syncOffers();
     message(`已采用 ${adopted} 条优惠规则。`,true);
   }));
   $('autopilot').addEventListener('click',()=>busy('正在一键读取：会打开浏览器、自动勾选、读取优惠明细（若需扫码会自动等待）',async()=>{
@@ -160,12 +189,12 @@
     const r=await autopilotLoop();
     snapshot=r.snapshot||null;selection.clear();currentGroup='view:current';
     await loadProject();renderCart();renderOffers();
-    pendingSuggested=r.suggested||[];pendingAssets=r.assets||[];renderSuggested();
+    pendingSuggested=r.suggested||[];pendingAssets=r.assets||[];deferredItems=r.deferred||[];renderSuggested();
     const got=Object.values(r.prices||{}).filter(x=>x&&x.cents).length;
     const rows=r.snapshot?.items?.length||0;
     message(`一键完成：读取 ${rows} 行，导入 ${r.imported} 件，取到标价 ${got} 件。`,true);
     $('connection-note').textContent=`已连接；本次自动勾选 ${r.selected_by_program||0} 行并已还原。`;
-    if(r.plan){project=r.plan.project;renderPlanWithDelete(r.plan);tab('plan');}else{tab('offers');}
+    if(r.plan){project=r.plan.project;lastPlan=r.plan;renderPlanWithDelete(r.plan);tab('plan');}else{tab('offers');}
   }));
   $('open-cart').addEventListener('click',()=>busy('正在打开购物车',async()=>{if(demo)throw new Error('体验模式不会连接淘宝。');await api('/api/cart/open',{method:'POST',body:'{}'});}));
   $('read-cart').addEventListener('click',()=>busy('正在读取当前购物车页面',async()=>{if(demo)throw new Error('体验模式使用虚构购物车。');snapshot=null;selection.clear();renderCart();snapshot=await api('/api/cart/read',{method:'POST',body:'{}'});selection.clear();currentGroup='view:current';renderCart();}));
@@ -237,15 +266,27 @@
     best.steps.forEach((step,i)=>{const box=el('div',null,'step');box.append(el('h2',`第${i+1}笔 · ${money(step.cash_due_cents)}`),el('p',step.item_ids.map(id=>names.get(id)||id).join(' ＋ ')));
       const q=quotes.get(step.quote_id),breakdown=el('div',null,'breakdown');
       for(const d of q?.discount_breakdown||[]){const row=el('div',null,'discount-line');row.append(el('span',d.name),el('strong','−'+money(d.discount_cents)));breakdown.append(row);}
-      if(!q?.discount_breakdown?.length)breakdown.append(el('p','这一笔没有采用已配置的优惠。'));
+      if(!q?.discount_breakdown?.length)breakdown.append(el('p','金额已含购物车已分摊优惠，未重复扣券。'));
       box.append(breakdown);root.append(box);
     });
     if(data.explanation){const d=el('details'),s=el('summary','其他券为什么没用？');d.append(s);for(const r of data.explanation.rules.filter(x=>!x.applied))d.append(el('p',r.name+'：'+r.reason));root.append(d);}
     const d=el('details');d.append(el('summary','查看试算范围与提醒'));for(const w of [...(data.simulation?.warnings||[]),...(best.warnings||[])])d.append(el('p',w));root.append(d);
     root.append(el('p',data.notice||'不代表淘宝全部活动已经覆盖。','hint'));
   }
-  $('estimate').onclick=()=>busy('正在比较店铺券和商品组合',async()=>{const result=demo?demoData:await api('/api/promotions/estimate',{method:'POST',body:'{}'});renderResult(result);tab('plan');});
+  $('estimate').onclick=()=>busy('正在比较店铺券和商品组合',async()=>{const result=demo?demoData:await api('/api/promotions/estimate',{method:'POST',body:'{}'});renderPlanWithDelete(result);tab('plan');});
   $('try-demo').onclick=()=>busy('正在准备购物车分组和组合优惠示例',async()=>{demoData=await api('/api/shopping/demo',{method:'POST',body:'{}'});demo=true;project=demoData.project;snapshot=demoData.cart;selection.clear();currentGroup='view:current';$('demo-note').hidden=false;renderCart();renderOffers();renderResult(demoData);tab('plan');});
   $('leave-demo').onclick=()=>busy('正在返回真实清单',async()=>{demo=false;demoData=null;snapshot=null;selection.clear();$('demo-note').hidden=true;await loadProject();renderCart();$('result').replaceChildren(el('h2','请重新计算真实清单'));tab('cart');});
-  busy('正在读取本机清单',async()=>{await loadProject();renderCart();const requested=location.hash.slice(1);tab(['cart','offers','plan'].includes(requested)?requested:'cart');});
+  busy('正在读取本机清单',async()=>{
+    await loadProject();syncOffers();
+    // 刷新页面也直接恢复已连接购物车与方案，不要求再次点击。
+    try{
+      const status=await api('/api/cart/status');
+      if(status.snapshot)snapshot=status.snapshot;
+      renderCart();
+      deferredItems=(project.items||[]).filter(x=>x.calculation_state==='presale_pending').map(x=>({title:x.title,quantity:x.quantity,reference_price_text:(x.notes.match(/参考总价([\d.]+)/)||[])[1]||''}));
+      if((project.items||[]).some(x=>x.required)){await refreshPlan();tab('plan');return;}
+      if(status.opened){$('autopilot').click();return;}
+    }catch(e){}
+    const requested=location.hash.slice(1);tab(['cart','offers','plan'].includes(requested)?requested:'cart');
+  });
 })();
