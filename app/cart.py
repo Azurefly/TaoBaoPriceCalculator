@@ -26,6 +26,10 @@ class ReadInput(StrictModel):
     native_group_id: str | None = Field(default=None, max_length=300)
 
 
+class BatchDetailInput(StrictModel):
+    steps: list[list[str]] = Field(min_length=1, max_length=6)
+
+
 class ImportInput(StrictModel):
     snapshot_id: str = Field(max_length=80)
     line_ids: list[str] = Field(min_length=1, max_length=28)
@@ -394,6 +398,48 @@ def create_cart_router(store,browser,root:Path):
                     'notice': '按购物车已分摊行实付计算；官方立减等没有重复扣减。最终以淘宝结算页为准。'}
         except Exception as error:
             plan = {'error': str(error), 'comparison': {'strategies': []}, 'simulation': {'warnings': [str(error)]}}
+
+        # 逐笔回读真实优惠明细：方案建议拆成几笔，就分别勾选那几件、读该笔自己的优惠明细。
+        # 每笔都是淘宝真实数据（跨店满减/红包在拆单后会重新分摊），读完还原原勾选。
+        async with browser.lock:
+            batch_details = []
+            try:
+                page = await browser.page()
+                await autopilot.wait_rows(page)
+                original = {r['line_id'] for r in snapshot['items'] if r.get('selected')}
+                best = next((s for s in plan.get('comparison', {}).get('strategies', [])
+                             if s.get('key') == 'optimized'), None)
+                steps = (best or {}).get('result', {}).get('steps') or []
+                script = (root / 'app/static/cart-reader.js').read_text('utf-8')
+                cfg = browser.config.model_dump()
+                for step in steps[:6]:
+                    lines = set()
+                    for it in project.items:
+                        if it.id in step.get('item_ids', []) and it.source_line_id:
+                            lines.add(it.source_line_id)
+                    if not lines:
+                        continue
+                    await autopilot.set_checked_lines(page, lines)
+                    await page.wait_for_timeout(2500)
+                    detail_raw = await autopilot.read_discount_detail(page)
+                    raw = await page.evaluate(script, cfg)
+                    raw_summary = raw.get('summary') or {}
+                    batch_details.append({
+                        'item_ids': sorted(step.get('item_ids', [])),
+                        'payable_cents': to_cents(raw_summary.get('payable_text')) if raw_summary.get('payable_text') else None,
+                        'discount_cents': to_cents(raw_summary.get('discount_text')) if raw_summary.get('discount_text') else None,
+                        'detail': parse_discount_detail(detail_raw),
+                    })
+                if original:
+                    await autopilot.set_checked_lines(page, original)
+                    await page.wait_for_timeout(1500)
+            except Exception as error:
+                batch_details = []
+                plan.setdefault('simulation', {}).setdefault('warnings', []).append(
+                    f'分笔优惠明细读取失败（不影响金额）：{type(error).__name__}')
+            if batch_details:
+                plan['batch_details'] = batch_details
+
         return {'state': 'ok', 'snapshot': snapshot, 'imported': len(project.items),
                 'selected_count': len(selected_lines), 'auto_selected': auto_selected,
                 'suggested': suggested, 'assets': assets, 'deferred': deferred, 'plan': plan,
@@ -459,6 +505,48 @@ def create_cart_router(store,browser,root:Path):
         return {'state': 'ok', 'payable_cents': payable, 'discount_cents': discount,
                 'detail': detail, 'updated': updated, 'keep': sorted(keep),
                 'note': '已按当前参与计算商品回读购物车真实重摊；未提交订单、未付款。'}
+
+    @router.post('/api/cart/batch-details')
+    async def batch_details(body: BatchDetailInput):
+        """按给定的每一笔（item_id 列表）逐笔勾选购物车、回读该笔自己的优惠明细。
+
+        拆单后跨店满减/红包会重新分摊，只有逐笔回读才能拿到每笔真实数据；读完还原原勾选。
+        """
+        if not browser.context:
+            raise ValueError('请先连接购物车')
+        page = await browser.page()
+        await autopilot.wait_rows(page)
+        current = store.load()
+        id_to_line = {it.id: it.source_line_id for it in current.items if it.source_line_id}
+        original = {it.source_line_id for it in current.items
+                    if it.required and it.source_line_id and it.calculation_state != 'presale_pending'}
+        script = (root / 'app/static/cart-reader.js').read_text('utf-8')
+        cfg = browser.config.model_dump()
+        results = []
+        try:
+            for step in body.steps:
+                lines = {id_to_line[i] for i in step if i in id_to_line}
+                if not lines:
+                    continue
+                await autopilot.set_checked_lines(page, lines)
+                await page.wait_for_timeout(2500)
+                detail_raw = await autopilot.read_discount_detail(page)
+                raw = await page.evaluate(script, cfg)
+                raw_summary = raw.get('summary') or {}
+                results.append({
+                    'item_ids': sorted(step),
+                    'payable_cents': to_cents(raw_summary.get('payable_text')) if raw_summary.get('payable_text') else None,
+                    'discount_cents': to_cents(raw_summary.get('discount_text')) if raw_summary.get('discount_text') else None,
+                    'detail': parse_discount_detail(detail_raw),
+                })
+        finally:
+            if original:
+                try:
+                    await autopilot.set_checked_lines(page, original)
+                    await page.wait_for_timeout(1200)
+                except Exception:
+                    pass
+        return {'batch_details': results, 'note': '逐笔优惠明细已回读；未提交订单、未付款。'}
 
     @router.post('/api/cart/disconnect')
     async def disconnect():

@@ -25,6 +25,10 @@
   async function refreshPlan(){
     try{const rq=await api('/api/cart/requote',{method:'POST',body:'{}'});if(rq.detail)lastDetail=rq.detail;}catch(e){}
     const result=await api('/api/promotions/estimate',{method:'POST',body:'{}'});
+    const steps=(result.comparison?.strategies?.find(s=>s.key==='optimized')?.result?.steps)||[];
+    if(steps.length){
+      try{const bd=await api('/api/cart/batch-details',{method:'POST',body:JSON.stringify({steps:steps.map(x=>x.item_ids)})});result.batch_details=bd.batch_details;}catch(e){}
+    }
     project=result.project;lastPlan=result;renderPlanWithDelete(result);return result;
   }
   function tab(name){['cart','offers','plan'].forEach(k=>$(k).hidden=k!==name);document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));history.replaceState(null,'','#'+name);}
@@ -62,9 +66,13 @@
     count();
   }
   async function requoteThenRefresh(){
-    // 切换参与后：先回读购物车真实重摊（含优惠明细），再重算并展示
+    // 切换参与后：回读真实重摊 → 出方案 → 逐笔回读每笔优惠明细 → 展示
     try{const rq=await api('/api/cart/requote',{method:'POST',body:'{}'});if(rq.detail)lastDetail=rq.detail;}catch(e){}
     const result=await api('/api/promotions/estimate',{method:'POST',body:'{}'});
+    const steps=(result.comparison?.strategies?.find(s=>s.key==='optimized')?.result?.steps)||[];
+    if(steps.length){
+      try{const bd=await api('/api/cart/batch-details',{method:'POST',body:JSON.stringify({steps:steps.map(x=>x.item_ids)})});result.batch_details=bd.batch_details;}catch(e){}
+    }
     project=result.project;lastPlan=result;renderPlanWithDelete(result);return result;
   }
   function renderPlanWithDelete(plan){
@@ -282,14 +290,31 @@
     if(data.project_changed_during_search){root.append(el('h2','计算时清单发生变化，请重新计算'));return;}
     const strategies=data.comparison?.strategies||[],best=strategies.find(x=>x.key==='optimized')?.result;
     if(best?.cash_due_cents==null){root.append(el('h2','还缺信息，暂时不能估算'));for(const w of data.simulation?.warnings||[])root.append(el('p',w));return;}
-    root.append(el('p','预计还需支付'),el('div',money(best.cash_due_cents),'total'));
+    const bds=data.batch_details||[];
+    const realSum=(bds.length&&bds.every(b=>b.payable_cents!=null))?bds.reduce((a,b)=>a+b.payable_cents,0):null;
+    const showTotal=realSum!=null?realSum:best.cash_due_cents;
+    root.append(el('p',realSum!=null?'拆单后实付（淘宝实时）':'预计还需支付'),el('div',money(showTotal),'total'));
+    if(realSum!=null&&realSum<best.cash_due_cents)root.append(el('p',`拆单比一次合并省 ${money(best.cash_due_cents-realSum)}`,'hint'));
     const metrics=el('div',null,'metrics');for(const s of strategies.filter(x=>x.key!=='optimized')){const c=el('div',null,'metric');c.append(el('small',s.name),el('b',money(s.result.cash_due_cents)));metrics.append(c);}root.append(metrics);
     renderDiscountDetail(root);
     const names=new Map(data.project.items.map(x=>[x.id,x.title]));const quotes=new Map(data.project.quotes.map(q=>[q.id,q]));
-    best.steps.forEach((step,i)=>{const box=el('div',null,'step');box.append(el('h2',`第${i+1}笔 · ${money(step.cash_due_cents)}`),el('p',step.item_ids.map(id=>names.get(id)||id).join(' ＋ ')));
-      const q=quotes.get(step.quote_id),breakdown=el('div',null,'breakdown');
-      for(const d of q?.discount_breakdown||[]){const row=el('div',null,'discount-line');row.append(el('span',d.name),el('strong','−'+money(d.discount_cents)));breakdown.append(row);}
-      if(!q?.discount_breakdown?.length)breakdown.append(el('p','这一笔的金额已含上方明细里的优惠，未重复扣券。'));
+    const batchDetails=data.batch_details||[];
+    best.steps.forEach((step,i)=>{const bd=batchDetails[i]||null;
+      const realPayable=bd?.payable_cents!=null?bd.payable_cents:step.cash_due_cents;
+      const box=el('div',null,'step');
+      box.append(el('h2',`第${i+1}笔 · ${money(realPayable)}${bd?.payable_cents!=null?'（淘宝实时）':''}`),el('p',step.item_ids.map(id=>names.get(id)||id).join(' ＋ ')));
+      const breakdown=el('div',null,'breakdown');
+      const detail=bd?.detail;
+      if(detail&&((detail.shop_lines||[]).length||(detail.platform_lines||[]).length)){
+        for(const x of [...(detail.shop_lines||[]).map(o=>({...o,g:'店铺优惠'})),...(detail.platform_lines||[]).map(o=>({...o,g:'平台优惠'}))]){
+          const row=el('div',null,'discount-line');row.append(el('span',x.label),el('strong','−'+money(x.cents)));breakdown.append(row);
+        }
+        if(detail.total_discount_cents!=null)breakdown.append(el('p',`本笔共减 ${money(detail.total_discount_cents)}`,'hint'));
+      }else{
+        const q=quotes.get(step.quote_id);
+        for(const d of q?.discount_breakdown||[]){const row=el('div',null,'discount-line');row.append(el('span',d.name),el('strong','−'+money(d.discount_cents)));breakdown.append(row);}
+        if(!q?.discount_breakdown?.length)breakdown.append(el('p','这一笔的金额已含购物车分摊优惠，未重复扣券。'));
+      }
       box.append(breakdown);root.append(box);
     });
     if(data.explanation){const d=el('details'),s=el('summary','其他券为什么没用？');d.append(s);for(const r of data.explanation.rules.filter(x=>!x.applied))d.append(el('p',r.name+'：'+r.reason));root.append(d);}
