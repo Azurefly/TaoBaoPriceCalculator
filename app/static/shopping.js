@@ -53,17 +53,22 @@
     try{
       if(requested.startsWith('taobao:')&&!demo){snapshot=await api('/api/cart/read',{method:'POST',body:JSON.stringify({native_group_id:requested.slice(7)})});}
       currentGroup=requested;renderCart();
-    }catch(e){currentGroup=old;renderCart();throw e;}
+    }catch(e){snapshot=null;selection.clear();currentGroup='view:current';renderCart();throw e;}
   }));
   $('connect').addEventListener('click',()=>busy('正在打开你自己的浏览器',async()=>{
     if(demo)throw new Error('请先退出体验，再连接真实账号。');
-    if(!$('consent').checked){document.querySelector('#cart details').open=true;throw new Error('请先在连接设置中勾选本机读取说明。');}
-    const connected=await api('/api/cart/connect',{method:'POST',body:JSON.stringify({local_consent:true,permission_reference:$('permission').value,permission_attested:$('attested').checked,new_account:$('new-account').checked})});
+    if(!$('consent').checked){
+      if(!window.confirm('允许在本机打开浏览器，读取你本人的淘宝购物车吗？\n不接收密码，不提交订单或付款。'))return;
+      $('consent').checked=true;
+    }
+    await api('/api/cart/connect',{method:'POST',body:JSON.stringify({local_consent:true,new_account:$('new-account').checked})});
+    $('new-account').checked=false;
+    snapshot=null;selection.clear();renderCart();
     $('connection-note').textContent='浏览器已经打开。请本人扫码登录，再点击“我已登录，读取商品”。';
   }));
   $('open-cart').addEventListener('click',()=>busy('正在打开购物车',async()=>{if(demo)throw new Error('体验模式不会连接淘宝。');await api('/api/cart/open',{method:'POST',body:'{}'});}));
   $('read-cart').addEventListener('click',()=>busy('正在读取当前购物车页面',async()=>{if(demo)throw new Error('体验模式使用虚构购物车。');snapshot=null;selection.clear();renderCart();snapshot=await api('/api/cart/read',{method:'POST',body:'{}'});selection.clear();currentGroup='view:current';renderCart();}));
-  $('disconnect').addEventListener('click',()=>busy('正在断开连接',async()=>{if(demo)throw new Error('体验模式没有连接淘宝。');const r=await api('/api/cart/disconnect',{method:'POST',body:'{}'});snapshot=null;renderCart();$('connection-note').textContent=r.note;}));
+  $('disconnect').addEventListener('click',()=>busy('正在断开连接',async()=>{if(demo)throw new Error('体验模式没有连接淘宝。');const r=await api('/api/cart/disconnect',{method:'POST',body:'{}'});snapshot=null;selection.clear();$('consent').checked=false;renderCart();$('connection-note').textContent=r.note;}));
   $('import-cart').addEventListener('click',()=>busy('正在导入选中的商品',async()=>{
     if(demo)throw new Error('示例不会导入真实清单。');
     if(!$('account-confirmed').checked)throw new Error('请先核对账号、规格和数量并勾选确认。');

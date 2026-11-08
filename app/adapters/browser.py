@@ -1,8 +1,8 @@
 """Experimental visible-DOM adapter. No private API replay, stealth or payment code.
 
-Disabled unless TAOBAO_PLATFORM_PERMISSION_REFERENCE is set to a real permission
-reference by the deployer. This is an attestation gate, NOT official authorization
-verification. Site-specific selectors require calibration and must fail closed.
+Uses the user's own visible browser session after local confirmation. No platform
+OAuth, API key or permission-reference form is required. A local confirmation is
+not a claim about platform authorization. Unknown pages and challenges stop actions.
 """
 from __future__ import annotations
 import asyncio
@@ -72,19 +72,26 @@ class BrowserAdapter:
         self.lock = asyncio.Lock()
         self.last_trial = 0.0
         self.config = BrowserConfig()
-        self.permission_reference = ''
+        self.local_consent = False
 
     def permitted(self) -> bool:
-        return bool(os.getenv('TAOBAO_PLATFORM_PERMISSION_REFERENCE', '').strip() or self.permission_reference)
+        """Compatibility name: local user consent only, NOT platform permission."""
+        return self.local_consent
 
     def require_permission(self):
-        if not self.permitted():
-            raise ValueError('自动读取尚未启用。请在连接设置中填写部署方的平台许可引用；扫码登录不替代平台许可。')
+        """Compatibility alias retained for existing internal callers."""
+        if not self.local_consent:
+            raise ValueError('请先点击“打开浏览器登录淘宝”，确认仅操作你本人的购物车。')
 
-    async def launch(self):
+    async def launch(self, *, local_consent: bool = False):
+        if local_consent is True:
+            self.local_consent = True
         self.require_permission()
         if self.context:
             return {'opened': True}
+        if self.pw:
+            await self.pw.stop()
+            self.pw = None
         from playwright.async_api import async_playwright
         self.pw = await async_playwright().start()
         try:
@@ -104,6 +111,12 @@ class BrowserAdapter:
                     continue
             if not self.context:
                 raise ValueError('未能打开浏览器。请安装Chrome或Edge，并关闭使用同一工具登录资料的窗口后重试。')
+            opened_context = self.context
+            def closed():
+                if self.context is opened_context:
+                    self.context = None
+                    self.local_consent = False
+            self.context.on('close', closed)
             page = self.context.pages[0] if self.context.pages else await self.context.new_page()
             await page.goto('https://cart.taobao.com/cart.htm', wait_until='domcontentloaded', timeout=45000)
         except Exception:
@@ -112,32 +125,46 @@ class BrowserAdapter:
                 self.context = None
             await self.pw.stop()
             self.pw = None
+            self.local_consent = False
             raise
         return {'opened': True, 'note': '请在打开的浏览器中自行扫码登录；程序不读取密码或支付凭证。'}
 
     async def close(self):
-        if self.context:
-            await self.context.close()
-            self.context = None
-        if self.pw:
-            await self.pw.stop()
-            self.pw = None
+        # Revoke permission before awaiting close; new actions cannot start.
+        self.local_consent = False
+        context, pw = self.context, self.pw
+        self.context = None
+        self.pw = None
+        try:
+            if context:
+                await context.close()
+        finally:
+            if pw:
+                await pw.stop()
 
     async def page(self):
         self.require_permission()
         if not self.context or not self.context.pages:
-            raise ValueError('尚未打开授权浏览器')
+            raise ValueError('尚未打开本机浏览器，请先点击“打开浏览器登录淘宝”')
         page = self.context.pages[-1]
         if not allowed_url(page.url):
             raise ValueError('当前页不是允许的淘宝/天猫HTTPS页面；暂停操作')
-        # Pause on explicit verification surfaces. No CAPTCHA bypass, no stealth.
-        for selector in ('#baxia-dialog-content', '#nc_1_wrapper', '[data-testid="captcha"]'):
-            loc = page.locator(selector)
-            if await loc.count() and await loc.first.is_visible():
-                raise ValueError('检测到安全验证；已暂停，请按平台提示人工处理')
-        if re.search(r'(?:login|passport)\.', urlparse(page.url).hostname or ''):
-            raise ValueError('仍处于登录页；请本人完成登录')
+        await self.check_page(page)
         return page
+
+    async def check_page(self, page):
+        self.require_permission()
+        if not allowed_url(page.url):
+            raise ValueError('当前页不是允许的淘宝/天猫HTTPS页面；暂停操作')
+        if re.search(r'(?:login|passport)\.', urlparse(page.url).hostname or ''):
+            raise ValueError('请在浏览器中本人扫码登录，完成后再点“我已登录，读取商品”。')
+        # Only inspect visible verification UI; never solve or hide it.
+        for selector in ('#baxia-dialog-content', '#nc_1_wrapper', '[data-testid="captcha"]',
+                         'iframe[src*="captcha"]', 'iframe[src*="baxia"]'):
+            nodes = page.locator(selector)
+            for index in range(min(await nodes.count(), 20)):
+                if await nodes.nth(index).is_visible():
+                    raise ValueError('检测到安全验证，已暂停。请本人在浏览器完成验证后重新操作。')
 
     async def _quantity(self, row, selector: str) -> int:
         node = row.locator(selector)
@@ -174,7 +201,7 @@ class BrowserAdapter:
                 out.append({'id': ident, 'title': title.strip()[:400], 'sku': sku.strip(),
                             'display_price_cents': price, 'display_price_kind': 'unknown',
                             'quantity': await self._quantity(row,cfg.quantity) if cfg.quantity else 1,
-                            'notes': '授权DOM采集；数量/定金/优惠口径需核对。仅当前加载的商品行。'})
+                            'notes': '本人浏览器页面读取；数量/定金/优惠口径需核对。仅当前加载的商品行。'})
             return {'items': out, 'complete': False,
                     'warning': '只证明当前DOM已加载行；虚拟滚动/折叠/失效商品可能未包含，不自动声称全量。'}
 
@@ -249,6 +276,7 @@ class BrowserAdapter:
                 tag = await cb.evaluate('(e)=>e.tagName.toLowerCase()+":"+e.type')
                 if tag != 'input:checkbox':
                     raise ValueError('仅支持原生checkbox，不对未知组件执行猜测点击')
+                await self.check_page(page)
                 await cb.set_checked(ident in expected_lines, timeout=5000)
             button = page.locator(cfg.checkout_button)
             if await button.count() != 1:
@@ -257,6 +285,7 @@ class BrowserAdapter:
             if not re.fullmatch(r'结算\s*(?:[（(]\s*\d+\s*[)）])?', label):
                 raise ValueError('按钮文字不在安全白名单；只允许“结算”，绝不点击提交订单/支付/确认收货')
             # This is the only non-checkbox automated click in the adapter.
+            await self.check_page(page)
             await button.click(timeout=10000)
             await page.wait_for_timeout(1500)
             return await self._observe(project, expected_ids)

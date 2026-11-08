@@ -16,8 +16,6 @@ from .cart_transition import wait_for_group
 
 class ConnectInput(StrictModel):
     local_consent: bool = False
-    permission_reference: str = Field(default='', max_length=500)
-    permission_attested: bool = False
     new_account: bool = False
 
 
@@ -111,7 +109,6 @@ def imported_project(project: Project, snapshot: dict, body: ImportInput) -> Pro
             old=known[item.id]
             if item.id in out.paid_item_ids(): raise ValueError('商品已有付款记录，不能覆盖')
             if not body.replace_existing: continue
-            # Only preserve economic evidence when identity and quantity are unchanged.
             unchanged=(old.quantity,old.sku,old.shop_id)==(item.quantity,item.sku,item.shop_id)
             if unchanged:
                 item=item.model_copy(update={key:getattr(old,key) for key in ('pricing_base_cents','pricing_base_evidence',
@@ -120,7 +117,6 @@ def imported_project(project: Project, snapshot: dict, body: ImportInput) -> Pro
         else: known[item.id]=item
     if len(known)>28: raise ValueError('一次购物计划最多28行。请缩小分组或减少选择；购物车查看不会截成28行。')
     out.items=list(known.values())
-    # Cart observations never authorize refreshing old checkout quote timestamps.
     return Project.model_validate(out.model_dump())
 
 
@@ -137,7 +133,6 @@ class CartService:
 
     async def read(self,native_group_id=None):
         async with self.browser.lock:
-            # A failed read/switch must not leave a previous account/group importable.
             self.snapshot=None
             page=await self.browser.page()
             script=(self.root/'app/static/cart-reader.js').read_text('utf-8')
@@ -156,6 +151,7 @@ class CartService:
                         if gid==native_group_id and await tab.is_visible(): matches.append(tab)
                     if len(matches)!=1: raise ValueError('分组入口不唯一，已停止切换')
                     if await matches[0].get_attribute('role')!='tab': raise ValueError('仅允许切换已识别的分组标签')
+                    await self.browser.check_page(page)
                     await matches[0].click(timeout=5000)
                     async def reread():
                         checked_page = await self.browser.page()
@@ -181,24 +177,22 @@ def create_cart_router(store,browser,root:Path):
             try:
                 page=await browser.page(); state='ready'; note='请在浏览器打开购物车，再点读取。'
             except ValueError as error:
-                state='needs_attention';note=str(error)
-        return {'opened':opened,'state':state,'note':note,'permission_configured':browser.permitted(),
+                state='needs_attention';note=str(error);service.snapshot=None
+        else:
+            service.snapshot=None
+        return {'opened':opened,'state':state,'note':note,'mode':'local_browser',
+                'local_consent':browser.permitted(),'official_api_required':False,
                 'snapshot':service.snapshot,'no_payment_capability':True}
 
     @router.post('/api/cart/connect')
     async def connect(body:ConnectInput):
-        if not body.local_consent: raise ValueError('首次连接需同意仅在本机读取购物车')
-        if not browser.permitted():
-            if not body.permission_attested or not body.permission_reference.strip():
-                raise ValueError('自动读取需部署方取得平台许可并填写许可引用；扫码登录不替代许可。也可先用示例或手动录入。')
-            # Attestation, not a fabricated platform OAuth grant. Kept in memory only.
-            browser.permission_reference=body.permission_reference.strip()
+        if not body.local_consent: raise ValueError('请确认仅在本机读取你本人的购物车。')
         async with browser.lock:
             if body.new_account:
                 if browser.context: raise ValueError('切换账号前请先断开连接，再到浏览器切换登录。')
                 service.connection_id=uuid.uuid4().hex
             if not browser.context: service.snapshot=None
-            result=await browser.launch()
+            result=await browser.launch(local_consent=True)
             service.identity_path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
             service.identity_path.write_text(json.dumps({'context':service.connection_id}),encoding='utf-8')
             try: service.identity_path.chmod(0o600)
@@ -208,6 +202,7 @@ def create_cart_router(store,browser,root:Path):
     @router.post('/api/cart/open')
     async def open_cart():
         async with browser.lock:
+            service.snapshot=None
             page=await browser.page()
             await page.goto('https://cart.taobao.com/cart.htm',wait_until='domcontentloaded',timeout=45000)
         return {'opened':True}
@@ -221,6 +216,12 @@ def create_cart_router(store,browser,root:Path):
 
     @router.post('/api/cart/import')
     async def import_cart(body:ImportInput,request:Request):
+        # A closed session or verification screen invalidates the old page snapshot.
+        try:
+            await browser.page()
+        except ValueError:
+            service.snapshot=None
+            raise
         snap=service.snapshot
         if not snap or snap['snapshot_id']!=body.snapshot_id: raise ValueError('购物车快照已变化，请重新选择')
         from datetime import datetime
@@ -237,6 +238,7 @@ def create_cart_router(store,browser,root:Path):
     @router.post('/api/cart/disconnect')
     async def disconnect():
         async with browser.lock:
-            await browser.close();service.snapshot=None;browser.permission_reference=''
+            service.snapshot=None
+            await browser.close()
         return {'closed':True,'note':'已停止读取。登录资料仅留在本机独立浏览器目录，可在该浏览器退出淘宝账号。'}
     return router

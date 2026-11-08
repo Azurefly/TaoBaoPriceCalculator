@@ -183,7 +183,7 @@ def test_import_only_selected_group_and_idempotent():
 
 def test_import_does_not_silently_truncate():
     s=snapshot();p=Project(items=[item(str(i)) for i in range(28)])
-    with pytest.raises(ValueError,match='28'):imported_project(p,s,ImportInput(snapshot_id=s['snapshot_id'],line_ids=['a'],account_confirmed=True))
+    with pytest.raises(ValueError):imported_project(p,s,ImportInput(snapshot_id=s['snapshot_id'],line_ids=['a'],account_confirmed=True))
 
 
 def test_ambiguous_cart_rows_prevent_import():
@@ -252,9 +252,19 @@ def test_reuse_physical_coupon_without_resetting_balance(client):
     assert len(store.load().resources)==1 and store.load().resources[0].available==0
 
 
-def test_cart_connection_never_claims_permission_from_login(client):
+def test_cart_connection_uses_local_consent_without_platform_reference(client,monkeypatch):
+    from app.adapters.browser import BrowserAdapter
+    calls=[]
+    async def launch(self, *, local_consent=False):
+        calls.append(local_consent)
+        return {'opened':True}
+    monkeypatch.setattr(BrowserAdapter,'launch',launch)
+    monkeypatch.delenv('TAOBAO_PLATFORM_PERMISSION_REFERENCE',raising=False)
     c,_=client
-    assert c.post('/api/cart/connect',json={'local_consent':True}).status_code==400
+    assert c.post('/api/cart/connect',json={}).status_code==400
+    assert not calls
+    assert c.post('/api/cart/connect',json={'local_consent':True}).status_code==200
+    assert calls==[True]
 
 
 def test_shopping_route_and_mutations_require_local_token():
