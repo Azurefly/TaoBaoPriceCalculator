@@ -129,6 +129,20 @@ def create_shopping_router(store,browser,root:Path):
             new=store.save(Project.model_validate(p.model_dump()),rev)
         return {'deleted':True,'revision':new,'items':len(p.items)}
 
+    @router.post('/api/items/{item_id}/toggle')
+    async def toggle_item(item_id:str,request:Request):
+        """切换商品是否参与本次计算（不删除，只改 required + 状态）。"""
+        with store.lock:
+            rev=revision(request);store.assert_revision(rev);p=store.load()
+            item=next((x for x in p.items if x.id==item_id),None)
+            if item is None: raise HTTPException(404,'该商品已不存在')
+            if item.id in p.paid_item_ids(): raise ValueError('不能修改已付款商品')
+            item.required = not item.required
+            if item.calculation_state in ('selected','unselected'):
+                item.calculation_state = 'selected' if item.required else 'unselected'
+            new=store.save(Project.model_validate(p.model_dump()),rev)
+        return {'toggled':True,'revision':new,'required':item.required}
+
     @router.post('/api/promotions/explain')
     async def explain(body:GroupInput):
         p=store.load()

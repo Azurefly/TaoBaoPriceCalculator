@@ -22,6 +22,7 @@
   async function loadProject(){const result=await api('/api/project');project=result.project;revision=result.revision;}
   function syncOffers(){renderOffers();}
   async function refreshPlan(){
+    try{await api('/api/cart/requote',{method:'POST',body:'{}'});}catch(e){}
     const result=await api('/api/promotions/estimate',{method:'POST',body:'{}'});
     project=result.project;lastPlan=result;renderPlanWithDelete(result);return result;
   }
@@ -59,22 +60,29 @@
     const warnings=[...(snapshot.errors||[]),...(snapshot.warnings||[])];$('capture-note').textContent=`本次页面读取 ${snapshot.items.length} 行，当前筛选 ${rows.length} 行。`+(warnings.length?' '+warnings.join(' '):'');
     count();
   }
+  async function requoteThenRefresh(){
+    // 切换参与后：先回读购物车真实重摊，再重算并展示
+    try{const rq=await api('/api/cart/requote',{method:'POST',body:'{}'});}catch(e){}
+    const result=await api('/api/promotions/estimate',{method:'POST',body:'{}'});
+    project=result.project;lastPlan=result;renderPlanWithDelete(result);return result;
+  }
   function renderPlanWithDelete(plan){
     lastPlan=plan;renderResult(plan);
     const host=$('result');if(!host)return;
     const box=el('div',null,'card');
-    box.append(el('h3','本次商品（删除后立即重算）'));
-    const rows=(project.items||[]).filter(it=>it.required);
+    box.append(el('h3','本次商品（开关切换后自动回读重摊）'));
+    const rows=(project.items||[]).filter(it=>it.calculation_state!=='presale_pending');
     if(!rows.length)box.append(el('p','没有参与本次计算的商品。回到购物车勾选后再读取。','hint'));
     for(const it of rows){
       const row=el('div',null,'hint');
-      row.append(el('span',`${it.title.slice(0,26)} · ${money(it.pricing_base_cents)}`));
-      const btn=el('button','删除','quiet');
-      btn.onclick=()=>busy('正在删除并重算',async()=>{
-        await api('/api/items/'+encodeURIComponent(it.id),{method:'DELETE'});
-        await loadProject();await refreshPlan();
+      const cb=el('input');cb.type='checkbox';cb.checked=!!it.required;
+      cb.onchange=()=>busy('正在回读购物车重摊',async()=>{
+        await api('/api/items/'+encodeURIComponent(it.id)+'/toggle',{method:'POST',body:'{}'});
+        await loadProject();await requoteThenRefresh();
       });
-      row.append(btn);box.append(row);
+      row.append(cb);
+      row.append(el('span',`${it.title.slice(0,26)} · ${money(it.pricing_base_cents)}`));
+      box.append(row);
     }
     const unselected=(project.items||[]).filter(x=>x.calculation_state==='unselected');
     if(unselected.length){

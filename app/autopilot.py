@@ -89,6 +89,45 @@ async def select_all_rows(page) -> int:
     return checked
 
 
+async def set_checked_lines(page, keep_line_ids: set[str]) -> int:
+    """按 line_id（sku:product:skuId）保留勾选，其余取消；返回变更行数。
+
+    勾选/取消勾选都属于购物车内的非交易操作，不点结算、不提交、不付款。
+    """
+    rows = page.locator('div.trade-cart-item-info')
+    total = await rows.count()
+    changed = 0
+    for i in range(total):
+        row = rows.nth(i)
+        try:
+            line = await row.evaluate(
+                "(r) => { const a=[...r.querySelectorAll(\"a[href*='item.htm']\")];"
+                " if(!a.length) return '';"
+                " const link=a.sort((x,y)=>(y.innerText||'').trim().length-(x.innerText||'').trim().length)[0];"
+                " try{const u=new URL(link.href);"
+                " return 'sku:'+(u.searchParams.get('id')||'')+':'+(u.searchParams.get('skuId')||'nosku');}catch(e){return '';} }")
+        except Exception:
+            continue
+        if not line:
+            continue
+        box = row.locator('input.ant-checkbox-input').first
+        should = line in keep_line_ids
+        try:
+            current = await box.is_checked()
+        except Exception:
+            continue
+        if current != should:
+            try:
+                if should:
+                    await box.check(timeout=3000)
+                else:
+                    await box.uncheck(timeout=3000)
+                changed += 1
+            except Exception:
+                pass
+    return changed
+
+
 async def read_discount_detail(page) -> str:
     """点开底部「优惠明细」浮层并取回原文，然后关闭。"""
     try:

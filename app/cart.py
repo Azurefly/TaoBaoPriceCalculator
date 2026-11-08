@@ -400,6 +400,62 @@ def create_cart_router(store,browser,root:Path):
                 'opened': opened, 'reconcile': snapshot.get('reconcile'), 'summary': snapshot.get('summary'),
                 'note': '按当前勾选商品直接出方案；未提交订单、未付款。'}
 
+    @router.post('/api/cart/requote')
+    async def requote():
+        """把本地「参与计算」商品的勾选同步到购物车，回读真实重摊后更新方案金额。
+
+        跨店满减按商品金额比例重摊，所以换勾选组合后行实付会变；只有回读购物车
+        才能拿到准确的新合计。此接口只做勾选/取消勾选与读取，不点结算、不提交、不付款。
+        """
+        if not browser.context:
+            raise ValueError('请先连接购物车')
+        page = await browser.page()
+        await autopilot.wait_rows(page)
+        current = store.load()
+        keep = {it.source_line_id for it in current.items
+                if it.required and it.source_line_id and it.calculation_state != 'presale_pending'}
+        await autopilot.set_checked_lines(page, keep)
+        await page.wait_for_timeout(2500)
+        detail_raw = await autopilot.read_discount_detail(page)
+        await page.wait_for_timeout(400)
+        script = (root / 'app/static/cart-reader.js').read_text('utf-8')
+        raw = await page.evaluate(script, browser.config.model_dump())
+        raw['detail_raw'] = detail_raw
+        rows = {}
+        for row in raw.get('items', []):
+            qty = row.get('quantity') or 1
+            unit = to_cents(row.get('display_price_text')) if row.get('display_price_text') else None
+            rows[row['line_id']] = {'line_total_cents': (unit * qty) if unit else None,
+                                    'quantity': qty, 'selected': row.get('selected', False)}
+        updated = 0
+        with store.lock:
+            cur = store.load()
+            for it in cur.items:
+                if it.source_line_id in rows and rows[it.source_line_id]['line_total_cents'] is not None:
+                    it.pricing_base_cents = rows[it.source_line_id]['line_total_cents']
+                    it.pricing_base_evidence = '回读购物车重摊后行实付'
+                    it.deposit_confirmed = True
+                    if it.deposit_paid_cents is None:
+                        it.deposit_paid_cents = 0
+                    updated += 1
+            raw_summary = raw.get('summary') or {}
+            payable = to_cents(raw_summary.get('payable_text')) if raw_summary.get('payable_text') else None
+            discount = to_cents(raw_summary.get('discount_text')) if raw_summary.get('discount_text') else None
+            # 分摊取整会留下 1 分尾差：把参与计算商品的行实付之和对齐到淘宝底部合计，
+            # 让方案金额与淘宝完全一致（差额归集到金额最大的行）。
+            # 仅当回读到的合计有效（>0）且差额在合理范围内才对齐，避免勾选失败把行减成负数。
+            req_items = [it for it in cur.items if it.required and it.pricing_base_cents is not None]
+            if payable and payable > 0 and req_items:
+                row_sum = sum(it.pricing_base_cents for it in req_items)
+                diff = payable - row_sum
+                if abs(diff) <= min(100, row_sum):
+                    largest = max(req_items, key=lambda x: x.pricing_base_cents)
+                    largest.pricing_base_cents += diff
+            store.save(Project.model_validate(cur.model_dump()))
+        return {'state': 'ok', 'payable_cents': payable, 'discount_cents': discount,
+                'updated': updated, 'keep': sorted(keep),
+                'note': '已按当前参与计算商品回读购物车真实重摊；未提交订单、未付款。'}
+
     @router.post('/api/cart/disconnect')
     async def disconnect():
         async with browser.lock:
