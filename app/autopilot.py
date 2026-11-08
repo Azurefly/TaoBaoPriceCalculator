@@ -129,30 +129,50 @@ async def set_checked_lines(page, keep_line_ids: set[str]) -> int:
 
 
 async def read_discount_detail(page) -> str:
-    """点开底部「优惠明细」浮层并取回原文，然后关闭。"""
-    try:
-        # 实测：可点击的是底部“优惠明细”这个文本节点本身（外层容器点不开）
-        entry = page.get_by_text('优惠明细', exact=False).first
-        await entry.click(timeout=5000)
-        await page.wait_for_timeout(1800)
-    except Exception:
-        return ''
-    raw = ''
-    try:
-        raw = await page.evaluate(r"""() => {
-          const vis = e => !!e && e.getClientRects().length > 0;
-          const all = [...document.querySelectorAll('body *')].filter(vis)
-            .filter(e => /商品总价/.test(e.innerText || '') && /优惠共减/.test(e.innerText || ''));
-          const deepest = all.filter(e => !all.some(o => o !== e && e.contains(o)))[0];
-          return deepest ? (deepest.innerText || '').trim().slice(0, 2000) : '';
-        }""")
-    finally:
+    """点开底部「优惠明细」浮层并取回原文，然后关闭。
+
+    浮层可能有状态残留（上次没关好 / 勾选变化导致页面重算），所以：
+    先探测是否已经开着，开着直接读；否则点开；读不到就重试一次。
+    """
+    read_js = r"""() => {
+      const vis = e => !!e && e.getClientRects().length > 0;
+      const all = [...document.querySelectorAll('body *')].filter(vis)
+        .filter(e => /商品总价/.test(e.innerText || '') && /优惠共减/.test(e.innerText || ''));
+      const deepest = all.filter(e => !all.some(o => o !== e && e.contains(o)))[0];
+      return deepest ? (deepest.innerText || '').trim().slice(0, 2000) : '';
+    }"""
+    for attempt in range(2):
+        # 先看浮层是否已经打开
         try:
-            await page.keyboard.press('Escape')
-            await page.wait_for_timeout(400)
+            existing = await page.evaluate(read_js)
         except Exception:
-            pass
-    return raw
+            existing = ''
+        if existing:
+            try:
+                await page.keyboard.press('Escape')
+                await page.wait_for_timeout(300)
+            except Exception:
+                pass
+            return existing
+        # 点开浮层
+        try:
+            entry = page.get_by_text('优惠明细', exact=False).first
+            await entry.click(timeout=5000)
+            await page.wait_for_timeout(1800)
+        except Exception:
+            continue
+        try:
+            raw = await page.evaluate(read_js)
+        except Exception:
+            raw = ''
+        if raw:
+            try:
+                await page.keyboard.press('Escape')
+                await page.wait_for_timeout(400)
+            except Exception:
+                pass
+            return raw
+    return ''
 
 
 def pick_list_price(detail: dict, row_price_cents: int | None) -> tuple[int | None, str]:

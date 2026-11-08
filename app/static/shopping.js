@@ -6,6 +6,7 @@
   let pendingAssets = [];
   let lastPlan = null;
   let deferredItems = [];
+  let lastDetail = null;
   let project = {items:[],rules:[]}, revision='', snapshot=null, demo=false, demoData=null, selection=new Set(), currentGroup='view:current', editingBase=null;
   const money = value => value == null ? '待核对' : '¥'+(value/100).toFixed(2);
   const el = (tag,text,cls) => {const n=document.createElement(tag);if(text!=null)n.textContent=text;if(cls)n.className=cls;return n;};
@@ -22,7 +23,7 @@
   async function loadProject(){const result=await api('/api/project');project=result.project;revision=result.revision;}
   function syncOffers(){renderOffers();}
   async function refreshPlan(){
-    try{await api('/api/cart/requote',{method:'POST',body:'{}'});}catch(e){}
+    try{const rq=await api('/api/cart/requote',{method:'POST',body:'{}'});if(rq.detail)lastDetail=rq.detail;}catch(e){}
     const result=await api('/api/promotions/estimate',{method:'POST',body:'{}'});
     project=result.project;lastPlan=result;renderPlanWithDelete(result);return result;
   }
@@ -61,8 +62,8 @@
     count();
   }
   async function requoteThenRefresh(){
-    // 切换参与后：先回读购物车真实重摊，再重算并展示
-    try{const rq=await api('/api/cart/requote',{method:'POST',body:'{}'});}catch(e){}
+    // 切换参与后：先回读购物车真实重摊（含优惠明细），再重算并展示
+    try{const rq=await api('/api/cart/requote',{method:'POST',body:'{}'});if(rq.detail)lastDetail=rq.detail;}catch(e){}
     const result=await api('/api/promotions/estimate',{method:'POST',body:'{}'});
     project=result.project;lastPlan=result;renderPlanWithDelete(result);return result;
   }
@@ -198,6 +199,7 @@
     const rows=r.snapshot?.items?.length||0;
     message(`已读取 ${rows} 行、参与计算 ${r.selected_count||0} 件；金额已取自淘宝实时合计。`,true);
     $('connection-note').textContent='方案金额已与购物车实时合计对齐，无需再手填应付金额。';
+    lastDetail=r.plan?.summary?.detail||r.snapshot?.summary?.detail||null;
     if(r.plan){project=r.plan.project;lastPlan=r.plan;renderPlanWithDelete(r.plan);tab('plan');}else{tab('offers');}
   }));
   $('open-cart').addEventListener('click',()=>busy('正在打开购物车',async()=>{if(demo)throw new Error('体验模式不会连接淘宝。');await api('/api/cart/open',{method:'POST',body:'{}'});}));
@@ -259,6 +261,22 @@
     await api('/api/promotions',{method:'POST',body:JSON.stringify({rule,is_coupon:!['pieces','bundle','tiered','repeat','item_reduction'].includes(type),available:int('coupon-count')})});
     $('offer-dialog').close();await loadProject();message('优惠已保存。修改优惠后，旧报价不会被自动当成新的实付价。',true);
   }catch(e){$('offer-error').textContent=e.message;}finally{save.disabled=false;}});
+  function renderDiscountDetail(root){
+    const d=lastDetail||null;
+    if(!d||(!(d.shop_lines||[]).length&&!(d.platform_lines||[]).length))return;
+    const card=el('div',null,'card');
+    card.append(el('h3',`本单优惠明细（共减 ${money(d.total_discount_cents)}）`));
+    const lines=(d.shop_lines||[]).map(x=>({...x,group:'店铺优惠'}))
+             .concat((d.platform_lines||[]).map(x=>({...x,group:'平台优惠'})));
+    let curGroup='';
+    for(const x of lines){
+      if(x.group!==curGroup){card.append(el('h4',x.group));curGroup=x.group;}
+      const row=el('div',null,'discount-line');
+      row.append(el('span',x.label),el('strong','−'+money(x.cents)));
+      card.append(row);
+    }
+    root.append(card);
+  }
   function renderResult(data){
     const root=$('result');root.replaceChildren();root.append(el('span',data.demo?'虚构示例 · 不会扣款':'规则估算 · 付款前需核对','badge demo'));
     if(data.project_changed_during_search){root.append(el('h2','计算时清单发生变化，请重新计算'));return;}
@@ -266,11 +284,12 @@
     if(best?.cash_due_cents==null){root.append(el('h2','还缺信息，暂时不能估算'));for(const w of data.simulation?.warnings||[])root.append(el('p',w));return;}
     root.append(el('p','预计还需支付'),el('div',money(best.cash_due_cents),'total'));
     const metrics=el('div',null,'metrics');for(const s of strategies.filter(x=>x.key!=='optimized')){const c=el('div',null,'metric');c.append(el('small',s.name),el('b',money(s.result.cash_due_cents)));metrics.append(c);}root.append(metrics);
+    renderDiscountDetail(root);
     const names=new Map(data.project.items.map(x=>[x.id,x.title]));const quotes=new Map(data.project.quotes.map(q=>[q.id,q]));
     best.steps.forEach((step,i)=>{const box=el('div',null,'step');box.append(el('h2',`第${i+1}笔 · ${money(step.cash_due_cents)}`),el('p',step.item_ids.map(id=>names.get(id)||id).join(' ＋ ')));
       const q=quotes.get(step.quote_id),breakdown=el('div',null,'breakdown');
       for(const d of q?.discount_breakdown||[]){const row=el('div',null,'discount-line');row.append(el('span',d.name),el('strong','−'+money(d.discount_cents)));breakdown.append(row);}
-      if(!q?.discount_breakdown?.length)breakdown.append(el('p','金额已含购物车已分摊优惠，未重复扣券。'));
+      if(!q?.discount_breakdown?.length)breakdown.append(el('p','这一笔的金额已含上方明细里的优惠，未重复扣券。'));
       box.append(breakdown);root.append(box);
     });
     if(data.explanation){const d=el('details'),s=el('summary','其他券为什么没用？');d.append(s);for(const r of data.explanation.rules.filter(x=>!x.applied))d.append(el('p',r.name+'：'+r.reason));root.append(d);}

@@ -452,8 +452,12 @@ def create_cart_router(store,browser,root:Path):
                     largest = max(req_items, key=lambda x: x.pricing_base_cents)
                     largest.pricing_base_cents += diff
             store.save(Project.model_validate(cur.model_dump()))
+        detail = parse_discount_detail(detail_raw)
+        # 浮层偶发读不到时，回退到上一次快照的明细，避免方案页明细丢失
+        if detail is None and service.snapshot:
+            detail = (service.snapshot.get('summary') or {}).get('detail')
         return {'state': 'ok', 'payable_cents': payable, 'discount_cents': discount,
-                'updated': updated, 'keep': sorted(keep),
+                'detail': detail, 'updated': updated, 'keep': sorted(keep),
                 'note': '已按当前参与计算商品回读购物车真实重摊；未提交订单、未付款。'}
 
     @router.post('/api/cart/disconnect')
