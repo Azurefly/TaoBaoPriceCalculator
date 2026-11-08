@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from .models import Item, Project, StrictModel, utcnow
 from .adapters.browser import money, allowed_url
 from .cart_transition import wait_for_group
+from .cart_reconcile import parse_discount_detail, reconcile, to_cents
 
 
 class ConnectInput(StrictModel):
@@ -52,9 +53,20 @@ def normalized_capture(raw: dict, connection_id: str) -> dict:
         except ValueError:
             pass
         if price is not None and price > 1_000_000_000: price = None
+        # 预售行在购物车里显示的是「定金」，不是货款；不能按单价×数量当作商品金额。
+        deposit_label = '定金' in str(source.get('price_label') or '')
+        if deposit_label:
+            price = None
         ident = 'tb-' + hashlib.sha256((connection_id+'\0'+line).encode()).hexdigest()[:24]
+        note = ''
+        if deposit_label:
+            ref = str(source.get('reference_price_text') or '').strip()
+            note = f'购物车显示的是定金{("（参考总价" + ref + "）") if ref else ""}，不是货款；请用详情页核对优惠前货款与尾款。'
         rows.append({**source,'line_id':line,'id':ident,'quantity':quantity,'display_price_cents':price,
                      'can_import': bool(quantity and source.get('title') and not source.get('disabled')),
+                     'price_label':str(source.get('price_label') or ''),
+                     'reference_price_text':str(source.get('reference_price_text') or ''),
+                     'display_note':note,
                      'pricing_base_cents':None,'pricing_base_evidence':'','deposit_confirmed':False})
     groups = [{'id':'view:current','name':'当前页面已读取的商品','source':'view'}]
     native_seen=set()
@@ -69,9 +81,23 @@ def normalized_capture(raw: dict, connection_id: str) -> dict:
         sid = row.get('shop_id')
         if sid: shops[sid]=row.get('shop_name') or sid
     groups += [{'id':'shop:'+sid,'name':name,'source':'shop'} for sid,name in sorted(shops.items())]
-    return {'snapshot_id':uuid.uuid4().hex,'captured_at':utcnow().isoformat(),'connection_id':connection_id,
+    raw_summary = raw.get('summary') or {}
+    detail = parse_discount_detail(raw.get('detail_raw') or '')
+    summary = {
+        'payable_cents': to_cents(raw_summary.get('payable_text')) if raw_summary.get('payable_text') else None,
+        'discount_cents': to_cents(raw_summary.get('discount_text')) if raw_summary.get('discount_text') else None,
+        'goods_total_cents': (detail or {}).get('goods_total_cents'),
+        'detail': detail,
+        'note': '' if detail else '未读到优惠明细：请在网页上手动点开“优惠明细”后重新读取',
+        'label_text': (raw_summary.get('raw') or '')[:120],
+        'discount_label_text': (raw_summary.get('discount_raw') or '')[:120],
+    }
+    snapshot = {'snapshot_id':uuid.uuid4().hex,'captured_at':utcnow().isoformat(),'connection_id':connection_id,
             'items':rows,'groups':groups,'active_group_id':raw.get('active_group_id'),
-            'complete':False,'errors':errors,'warnings':raw.get('warnings',[]),'profile':raw.get('profile','')}
+            'complete':False,'errors':errors,'warnings':raw.get('warnings',[]),'profile':raw.get('profile',''),
+            'summary':summary}
+    snapshot['reconcile'] = reconcile(snapshot)
+    return snapshot
 
 
 def filter_rows(snapshot: dict, group_id: str):

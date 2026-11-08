@@ -75,9 +75,19 @@ class Rule(StrictModel):
     name: str
     kind: Literal['fixed', 'percent', 'repeat_threshold', 'quantity_fixed', 'tiered', 'bundle_price'] = 'fixed'
     phase: int = Field(default=10, ge=0, le=999)
+    # 官方四层：单品级 / 店铺级 / 跨店级 / 个人资产类。空字符串=未标注，按旧行为处理。
+    layer: Literal['', 'unit', 'shop', 'cross', 'asset'] = ''
+    # 跨店满减的档位（如 "300-50"）。不同档位不能在同一单里合并凑单。
+    band: str = ''
+    # 优惠族（如 "category_coupon"）。同族在同一件商品上只生效一个。
+    family: str = ''
+    # 与 family 配合：同一商品最多能用几个同族优惠。family 非空时默认 1。
+    per_item_limit: int | None = Field(default=None, ge=1, le=5)
     selection_mode: Literal['optional', 'mandatory', 'best'] = 'optional'
-    threshold_basis: Literal['base', 'remaining'] = 'remaining'
-    discount_basis: Literal['base', 'remaining'] = 'remaining'
+    # 官方口径默认“平行”：店铺级/跨店级门槛按单品优惠价（base）判。
+    # 只有官方立减与个人资产类（红包/淘金币）才显式改成 remaining。
+    threshold_basis: Literal['base', 'remaining'] = 'base'
+    discount_basis: Literal['base', 'remaining'] = 'base'
     threshold_cents: Money = 0
     amount_cents: Money = 0
     discount_bps: int = Field(default=0, ge=0, le=10000)
@@ -118,6 +128,17 @@ class Rule(StrictModel):
             raise ValueError('指定或必选商品不能同时被排除')
         if self.kind == 'repeat_threshold' and not self.threshold_cents:
             raise ValueError('repeat_threshold 必须设置大于0的门槛')
+        # 单品级与个人资产类不参与门槛判定：门槛字段必须为 0，否则规则写错了。
+        if self.layer in ('unit', 'asset') and self.threshold_cents:
+            raise ValueError('单品级/个人资产类优惠不参与门槛判定，门槛必须为 0')
+        # 跨店满减没有档位就无法判断能否与其他档位合并；能推则自动补上。
+        if self.layer == 'cross' and self.kind in ('repeat_threshold', 'tiered') and not self.band:
+            if self.kind == 'repeat_threshold':
+                self.band = f'{self.threshold_cents}-{self.amount_cents}'
+            else:
+                raise ValueError('跨店阶梯优惠必须写明档位 band')
+        if self.family and self.per_item_limit is None:
+            self.per_item_limit = 1
         if self.resource_id and not self.resource_units:
             raise ValueError('用券必须消耗至少一个资源单位')
         for dt in (self.starts_at, self.ends_at):

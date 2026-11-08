@@ -50,7 +50,7 @@ function edit(kind,id){
   const x=obj||{};
   html=field('id','实例ID；每一张券保持唯一',x.id||uid('coupon'))+field('name','权益名称',x.name||'')+field('kind','类型：coupon / redpacket / coins / stored_value / quota / other',x.kind||'coupon')+field('available','剩余单位数（单张券=1；可拆余额可按分计）',x.available??1,'number')+field('cost','每单位机会成本（元；普通券0，购物金每分单位0.01）',((x.opportunity_cost_cents||0)/100).toFixed(2))+field('notes','备注',x.notes||'')+field('resource-start','生效时间（带时区ISO，未知留空）',x.starts_at||'')+field('resource-end','到期时间（带时区ISO，未知留空）',x.ends_at||'');
  }else if(kind==='rule'){
-  const x=obj||{id:uid('rule'),name:'新活动满减',kind:'fixed',phase:10,threshold_basis:'remaining',discount_basis:'remaining',threshold_cents:100000,amount_cents:12500,discount_bps:0,cap_cents:null,min_quantity:1,item_ids:[],shop_ids:[],item_tags:[],channels:[],resource_id:null,resource_units:1,exclusive_group:'',starts_at:null,ends_at:null,confirmed:false,source_note:''};
+  const x=obj||{id:uid('rule'),name:'新活动满减',kind:'fixed',phase:10,threshold_basis:'base',discount_basis:'base',threshold_cents:100000,amount_cents:12500,discount_bps:0,cap_cents:null,min_quantity:1,item_ids:[],shop_ids:[],item_tags:[],channels:[],resource_id:null,resource_units:1,exclusive_group:'',starts_at:null,ends_at:null,confirmed:false,source_note:''};
   editing.defaults=x;
   html='<p>按具体活动配置；没有自动套用“双十一”的规则。金额以元输入。</p>'
    +field('id','规则ID',x.id)+field('name','规则名称',x.name)

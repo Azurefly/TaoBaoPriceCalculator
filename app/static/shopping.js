@@ -40,11 +40,27 @@
       const body=el('div',null,'body');body.append(el('b',r.title),el('small',`${r.shop_name||'店铺待确认'} · ${r.sku||'规格待核对'} · ${r.quantity??'?'}件`));
       if(!r.can_import)body.append(el('small','数量未识别或商品失效，暂不能导入','failed'));
       for(const text of r.observed_promotions||[])body.append(el('small',text));
+      if(r.price_label&&r.price_label!=='平台加补后')body.append(el('small',r.price_label,'hint'));
+      if(r.reference_price_text)body.append(el('small',`参考价 ¥${r.reference_price_text}`,'hint'));
+      if(r.display_note)body.append(el('small',r.display_note,'notice'));
       line.append(check,body,el('span',money(r.display_price_cents),'price'));$('cart-items').append(line);
     }
     if(!rows.length)$('cart-items').append(el('div','这个分组目前没有已读取的商品。不会用全部商品替代。','empty'));
+    renderReconcile();
     const warnings=[...(snapshot.errors||[]),...(snapshot.warnings||[])];$('capture-note').textContent=`本次页面读取 ${snapshot.items.length} 行，当前筛选 ${rows.length} 行。`+(warnings.length?' '+warnings.join(' '):'');
     count();
+  }
+  function renderReconcile(){
+    const box=$('cart-reconcile'),rows=snapshot?.reconcile||[],summary=snapshot?.summary||{};
+    if(!rows.length){box.hidden=true;box.replaceChildren();return;}
+    box.hidden=false;box.replaceChildren();
+    box.append(el('div',`底部合计 ${money(summary.payable_cents)} · 已优惠 ${money(summary.discount_cents)} · 商品总价 ${money(summary.goods_total_cents)}`,'notice'));
+    for(const row of rows){
+      const mark=row.ok===true?'✓ 对':row.ok===false?'✗ 不一致':'– 待核对';
+      box.append(el('div',`${mark} · ${row.check}${row.detail?'（'+row.detail+'）':''}`,
+        row.ok===true?'hint':row.ok===false?'notice':'hint'));
+    }
+    if(summary.note)box.append(el('div',summary.note,'hint'));
   }
   function count(){const n=selectedRows().filter(r=>selection.has(r.line_id)).length;$('selected-count').textContent=`已选 ${n} 行（一次最多导入28行）`;$('import-cart').disabled=demo||!n||!!snapshot?.errors?.length;}
   $('select-cart').addEventListener('click',()=>{selectedRows().filter(r=>r.can_import).forEach(r=>selection.add(r.line_id));renderCart();});
@@ -115,7 +131,7 @@
     const fraction=Number($('offer-amount').value);if(['pieces','live'].includes(type)&&(!Number.isFinite(fraction)||fraction<=0||fraction>=10))throw new Error('折扣请填大于0、小于10的数字，例如8.5折。');
     const rule={id:'r-'+[...crypto.getRandomValues(new Uint8Array(10))].map(x=>x.toString(16).padStart(2,'0')).join(''),name:$('offer-name').value.trim(),kind,phase:Number($('phase').value),
       selection_mode:shopLevel&&$('stack').value==='best'?'best':type==='item_reduction'?'mandatory':'optional',exclusive_group:shopLevel&&$('stack').value==='best'?'shop:'+shop:({platform:'88vip-consumer-coupon',category:'category-coupon',live:'live-coupon'})[type]||'',exclusive_scope:shopLevel?'item':'payment',
-      threshold_basis:$('basis').value,discount_basis:'remaining',threshold_cents:type==='bundle'?0:cents($('offer-threshold').value),amount_cents:['pieces','live','tiered'].includes(type)?0:cents($('offer-amount').value),
+      threshold_basis:$('basis').value,discount_basis:'base',threshold_cents:type==='bundle'?0:cents($('offer-threshold').value),amount_cents:['pieces','live','tiered'].includes(type)?0:cents($('offer-amount').value),
       discount_bps:['pieces','live'].includes(type)?Math.round(10000-fraction*1000):0,cap_cents:cents($('cap').value,true),min_quantity:int('min-quantity'),min_distinct_items:int('min-distinct'),
       item_ids:scope,qualifying_item_ids:qualifying,excluded_item_ids:ids('exclude-items'),required_item_quantities:required,shop_ids:shop?[shop]:[],
       resource_id:$('existing-resource').value||null,channels:$('channel').value?[$('channel').value]:[],confirmed:$('confirmed').checked,source_note:$('evidence').value.trim(),

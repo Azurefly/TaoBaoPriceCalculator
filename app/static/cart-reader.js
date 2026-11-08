@@ -16,7 +16,16 @@
         /(^|\.)(taobao\.com|tmall\.com|tmall\.hk)$/.test(u.hostname) ? u.href : '';
     } catch { return ''; }
   };
-  const presets = cfg.rows ? [cfg.rows] : ['[data-cart-item]', '#J_OrderList .item-holder', '.J_ItemBody'];
+  // 2026-11 真实购物车：行 .trade-cart-item-info，店铺 .trade-cart-shop-container(#bundle_s_<sellerId>)。
+  // 价格由整数/小数/小数点三个节点拼成；带“平台加补后”等标签时，第二个容器才是参考价。
+  const NEW_PROFILE = 'div.trade-cart-item-info';
+  const readPriceBox = box => {
+    const int = box.querySelector('[class*="trade-price-integer"]');
+    if (!int) return '';
+    const dec = box.querySelector('[class*="trade-price-decimal"]');
+    return `${text(int)}${dec ? '.' + text(dec) : ''}`;
+  };
+  const presets = cfg.rows ? [cfg.rows] : ['[data-cart-item]', NEW_PROFILE, '#J_OrderList .item-holder', '.J_ItemBody'];
   let rows = [], profile = '';
   for (const selector of presets) {
     const candidates = [...document.querySelectorAll(selector)].filter(visible);
@@ -30,6 +39,42 @@
   const errors = [], warnings = [], items = [], seen = new Set();
   if(rows.length>500) errors.push('当前页面超过500行，请先在淘宝选择一个分组。');
   for (const row of rows.slice(0,500)) {
+    if (profile === NEW_PROFILE) {
+      const itemLinks = [...row.querySelectorAll('a[href*="item.htm"]')].filter(visible);
+      const link = itemLinks.sort((a,b)=>(b.innerText||'').trim().length-(a.innerText||'').trim().length)[0] || null;
+      const rowTitle = (link?.innerText || '').trim().replace(/\s+/g,' ');
+      let product = '', skuId = '';
+      try { const u = new URL(link?.href || '', location.href);
+        product = u.searchParams.get('id') || ''; skuId = u.searchParams.get('skuId') || ''; } catch {}
+      const rowLine = product ? `sku:${product}:${skuId || 'nosku'}` : '';
+      if (!rowTitle || !rowLine) { errors.push('有商品缺少唯一行标识或标题，未导入；不能只凭商品名合并。'); continue; }
+      if (seen.has(rowLine)) { errors.push('发现重复商品行标识，可能是页面结构变化；请切换分组后重新读取。'); continue; }
+      seen.add(rowLine);
+      const boxes = [...row.querySelectorAll('[class*="trade-price-container"]')].filter(visible);
+      const priceText = boxes[0] ? readPriceBox(boxes[0]) : '';
+      const priceLabel = boxes[0] ? text(boxes[0].querySelector('[class*="trade-price-label"]')) : '';
+      const refText = boxes[1] ? readPriceBox(boxes[1]) : '';
+      const qtyInput = row.querySelector('[class*="trade-cart-item-quantity"] input, input[class*="inputWrapper"]');
+      const qtyNode = [...row.querySelectorAll('[class*="quantityNum"]')].filter(visible)[0] || null;
+      const qtyText = qtyInput ? String(qtyInput.value || '').trim() : (qtyNode ? text(qtyNode) : '');
+      const rowQty = /^[1-9]\d{0,2}$/.test(qtyText) ? Number(qtyText) : null;
+      const shopBox = row.closest('[class*="trade-cart-shop-container"]') || row;
+      const rowShopId = (shopBox.getAttribute('id') || '').replace(/^bundle_s_/, '');
+      const rowShopName = text(shopBox.querySelector('[class*="shopName"], [class*="shop-name"]'));
+      const promos = (row.innerText || '').split(/\n+/).map(s=>s.trim())
+        .filter(t=>t && t.length<=40 && /官方立减|消费券|补贴|礼金|满减|券|直降/.test(t)).slice(0,10);
+      const rowBox = row.querySelector('input[type=checkbox]');
+      items.push({line_id: rowLine, product_id: product, title: rowTitle.slice(0,400), sku: '', quantity: rowQty,
+        shop_id: rowShopId, shop_name: rowShopName.slice(0,160),
+        display_price_text: priceText.slice(0,80), price_scope: priceText ? 'unit' : 'unknown',
+        price_label: priceLabel, reference_price_text: refText.slice(0,80),
+        group_ids: [], group_names: [], observed_promotions: promos,
+        selected: !!rowBox?.checked,
+        // 原生 checkbox 在多数可购买行上也带 disabled（渲染态），不能据此判断不可买；
+        // 只按页面明示的失效文案判断。
+        disabled: /商品缺货|不可购买|补货中|已失效|已下架/.test((row.innerText||'').slice(0,160))});
+      continue;
+    }
     const titleNode=first(row,[cfg.title,'[data-title]','.item-basic-info a.item-title','a.item-title','a[href*="item.taobao.com/item.htm"]','a[href*="detail.tmall.com/item.htm"]']);
     const title=titleNode?.getAttribute('data-title') || text(titleNode);
     const itemURL=safeLink(titleNode?.closest('a') || row.querySelector('a[href*="item.htm"]'));
@@ -59,9 +104,25 @@
       group_ids:active.length===1?[active[0].id]:[],group_names:active.length===1?[active[0].name]:[],
       observed_promotions:promotion,disabled:row.getAttribute('data-disabled')==='true'||row.getAttribute('aria-disabled')==='true'});
   }
+  // 底部合计：totalPrice 是拆分节点，需先去掉空白再取金额
+  const moneyIn = raw => { const m = String(raw||'').replace(/\s/g,'').match(/(\d{1,7}(?:\.\d{1,2})?)/); return m ? m[1] : ''; };
+  const totalNode = [...document.querySelectorAll('[class*="totalPrice"]')].filter(visible)[0] || null;
+  const discNode = [...document.querySelectorAll('[class*="totalDiscount"]')].filter(visible)[0] || null;
+  const summary = totalNode ? {
+    payable_text: moneyIn(text(totalNode)),
+    discount_text: discNode ? moneyIn(text(discNode)) : '',
+    raw: text(totalNode).slice(0,120),
+    discount_raw: discNode ? text(discNode).slice(0,120) : ''
+  } : null;
+  // 优惠明细：只有在你手动点开浮层后才会读到；读取器本身从不点击
+  const dlgAll = [...document.querySelectorAll('body *')].filter(visible)
+    .filter(e => /商品总价/.test(e.innerText||'') && /优惠共减/.test(e.innerText||''));
+  const dlg = dlgAll.filter(e => !dlgAll.some(o => o !== e && e.contains(o)))[0] || null;
+  const detail_raw = dlg ? (dlg.innerText||'').trim().slice(0,2000) : '';
   if(!profile) warnings.push('未识别到受支持的购物车商品行；请确认已登录并打开购物车。不会把识别失败当成空购物车。');
+  if(!summary) warnings.push('未读到购物车底部合计节点；请确认已勾选商品。');
   warnings.push('仅包含当前页面已加载的商品；折叠、分页、虚拟滚动中的未加载商品可能遗漏。');
   if(!groups.length) warnings.push('网页未提供可识别的淘宝分组；可先在淘宝手动进入分组，再读取当前页面。按店铺筛选不是淘宝自定义分组。');
   const loading = [...document.querySelectorAll('[aria-busy="true"], [data-cart-loading="true"]')].some(visible);
-  return {items,groups,loading,active_group_id:active.length===1?active[0].id:null,profile,complete:false,errors,warnings};
+  return {items,groups,loading,active_group_id:active.length===1?active[0].id:null,profile,complete:false,errors,warnings,summary,detail_raw};
 }

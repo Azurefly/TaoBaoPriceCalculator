@@ -195,10 +195,22 @@ def test_optimizer_matches_exhaustive_enumeration(seed):
 def test_mandatory_automatic_reduction_cannot_be_skipped():
     p=Project(items=[item('a',10000)],rules=[
         Rule(id='auto',name='自动减20',amount_cents=2000,phase=1,selection_mode='mandatory',confirmed=True),
-        Rule(id='threshold',name='剩余100减50',amount_cents=5000,threshold_cents=10000,phase=2,confirmed=True)])
+        Rule(id='threshold',name='剩余100减50',amount_cents=5000,threshold_cents=10000,
+             threshold_basis='remaining',phase=2,confirmed=True)])
     qs,_=simulate_group(p,['a'],NOW)
     assert min(q.cash_due_cents for q in qs)==8000
     assert all('auto' in q.applied_rules for q in qs)
+
+def test_default_threshold_basis_is_official_parallel():
+    # 官方：店铺级/跨店级门槛按单品优惠价（base）判；先减 20 后门槛仍按 100 判 → 成立
+    assert Rule(id='r',name='r').threshold_basis=='base'
+    assert Rule(id='r',name='r').discount_basis=='base'
+    p=Project(items=[item('a',10000)],rules=[
+        Rule(id='auto',name='自动减20',amount_cents=2000,phase=1,selection_mode='mandatory',confirmed=True),
+        Rule(id='th',name='满100减50',amount_cents=5000,threshold_cents=10000,phase=2,confirmed=True)])
+    qs,_=simulate_group(p,['a'],NOW)
+    assert min(q.cash_due_cents for q in qs)==3000
+
 
 def test_refund_not_the_original_list_price():
     from app.refunds import RefundScenario, evaluate_refund
@@ -232,3 +244,44 @@ def test_extra_fees_are_included_in_cash_total():
     assert r['cash_due_cents']==1800 and r['economic_cost_cents']==1800
     assert r['steps'][0]['checkout_cash_due_cents']==1000
     assert r['steps'][0]['extra_cash_cost_cents']==800
+
+
+def test_layer_validations_and_implicit_constraints():
+    import pytest
+    from pydantic import ValidationError
+    # 单品级/个人资产类不允许带门槛
+    for layer in ('unit', 'asset'):
+        with pytest.raises(ValidationError):
+            Rule(id='x', name='x', layer=layer, threshold_cents=100, confirmed=True)
+    # 跨店每满减自动补档位
+    band_rule = Rule(id='b', name='b', kind='repeat_threshold', layer='cross',
+                     threshold_cents=30000, amount_cents=5000, confirmed=True)
+    assert band_rule.band == '30000-5000'
+    # 优惠族默认每件商品限 1 个
+    fam = Rule(id='f', name='f', family='category_coupon', confirmed=True)
+    assert fam.per_item_limit == 1
+
+
+def test_family_limits_one_coupon_per_item():
+    p=Project(items=[item('a',10000)],rules=[
+        Rule(id='c1',name='品类券1',amount_cents=3000,family='category_coupon',layer='cross',confirmed=True),
+        Rule(id='c2',name='品类券2',amount_cents=3000,family='category_coupon',layer='cross',confirmed=True)])
+    qs,_=simulate_group(p,['a'],NOW)
+    assert min(q.cash_due_cents for q in qs)==7000
+
+
+def test_cross_band_cannot_merge():
+    p=Project(items=[item('a',40000)],rules=[
+        Rule(id='b3',name='满300减50',kind='repeat_threshold',threshold_cents=30000,amount_cents=5000,layer='cross',confirmed=True),
+        Rule(id='b2',name='满200减20',kind='repeat_threshold',threshold_cents=20000,amount_cents=2000,layer='cross',confirmed=True)])
+    qs,_=simulate_group(p,['a'],NOW)
+    assert min(q.cash_due_cents for q in qs)==35000
+
+
+def test_asset_layer_cannot_raise_threshold():
+    p=Project(items=[item('a',6000)],rules=[
+        Rule(id='cross',name='满100减50',amount_cents=5000,threshold_cents=10000,layer='cross',confirmed=True),
+        Rule(id='red',name='红包',amount_cents=5000,layer='asset',phase=60,
+             threshold_basis='remaining',discount_basis='remaining',confirmed=True)])
+    qs,_=simulate_group(p,['a'],NOW)
+    assert min(q.cash_due_cents for q in qs)==1000

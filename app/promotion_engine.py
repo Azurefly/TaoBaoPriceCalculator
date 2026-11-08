@@ -25,6 +25,40 @@ def distribute(amount: int, weights: dict[str, int]) -> dict[str, int]:
     return out
 
 
+def allocate(amount: int, base: dict[str, int], remaining: dict[str, int]) -> dict[str, int]:
+    """官方分摊口径：先按单品优惠价比例摊，被打穿的行压到 0，溢出额按剩余继续摊到抵满。
+
+    淘宝规则：合并付款时优惠“按各商品单品优惠价比例分摊”；出现 0 或负数时
+    “按子订单剩余金额继续分摊，直至抵扣为 0 元”。直接按剩余比例摊会在个别行
+    产生与结算页不同的行级金额（影响退款预测与明细核对）。
+    """
+    eligible_ids = [key for key in base if remaining.get(key, 0) > 0]
+    if amount <= 0 or not eligible_ids:
+        return {key: 0 for key in base}
+    amount = min(amount, sum(remaining[key] for key in eligible_ids))
+    parts = distribute(amount, {key: max(base[key], 0) for key in eligible_ids})
+    overflow = 0
+    for key, value in parts.items():
+        if value > remaining[key]:
+            overflow += value - remaining[key]
+            parts[key] = remaining[key]
+    for _ in range(len(eligible_ids) + 1):
+        if overflow <= 0:
+            break
+        room = {key: remaining[key] - parts[key] for key in eligible_ids if remaining[key] - parts[key] > 0}
+        if not room:
+            break
+        moved = 0
+        for key, value in distribute(overflow, room).items():
+            take = min(value, room[key])
+            parts[key] += take
+            moved += take
+        if not moved:
+            break
+        overflow -= moved
+    return {key: parts.get(key, 0) for key in base}
+
+
 def eligible(rule: Rule, item: Item, *, qualifying: bool = False) -> bool:
     ids = rule.qualifying_item_ids if qualifying and rule.qualifying_item_ids else rule.item_ids
     return (item.id not in rule.excluded_item_ids
@@ -44,10 +78,22 @@ class State:
 
 
 def conflict_keys(rule: Rule, qualifiers: list[Item], targets: list[Item]) -> frozenset:
-    if not rule.exclusive_group:
-        return frozenset()
-    ids = {x.id for x in qualifiers + targets} if rule.exclusive_scope == 'item' else {'*'}
-    return frozenset((rule.exclusive_group, ident) for ident in ids)
+    """互斥键：显式互斥组 + 两个官方内置约束。
+
+    - 优惠族（family）：同族在同一件商品上只生效一个（品类券“一单一件商品最多1张”）。
+    - 档位（band）：跨店满减同一单只允许一个档位（不同档位不能合并凑单）。
+    """
+    keys = set()
+    touched = qualifiers + targets
+    if rule.exclusive_group:
+        ids = {x.id for x in touched} if rule.exclusive_scope == 'item' else {'*'}
+        keys |= {(rule.exclusive_group, ident) for ident in ids}
+    if rule.family:
+        keys |= {(f'family:{rule.family}', x.id) for x in touched}
+    if rule.layer == 'cross' and rule.band:
+        keys.add((f'band:{rule.band}', '*'))
+        keys.add(('band:any', '*'))          # 一个订单里只能有一个跨店档位在生效
+    return frozenset(keys)
 
 
 def offer(project: Project, rule: Rule, items: list[Item], base: dict[str, int], state: State, at: datetime):
@@ -109,7 +155,9 @@ def offer(project: Project, rule: Rule, items: list[Item], base: dict[str, int],
     discount = min(discount, sum(state.remaining[x.id] for x in targets))
     if not discount:
         return None, '符合范围，但本次不会减少应付金额'
-    allocation = distribute(discount, {x.id: state.remaining[x.id] for x in targets})
+    # 先按单品优惠价比例分摊，再处理打穿（官方口径），而不是直接按剩余比例摊。
+    allocation = allocate(discount, {x.id: base[x.id] for x in targets},
+                          {x.id: state.remaining[x.id] for x in targets})
     record = DiscountBreakdown(rule_id=rule.id, name=rule.name,
         qualifying_item_ids=[x.id for x in qualifiers], discounted_item_ids=[x.id for x in targets],
         qualifying_cents=qualify, discount_cents=discount, allocations=allocation)

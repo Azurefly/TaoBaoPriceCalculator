@@ -82,7 +82,7 @@ def test_overlapping_item_discounts_cannot_stack():
 
 
 def test_platform_threshold_uses_after_shop_price():
-    p=Project(items=[item('a',10500)],rules=[rule(id='shop',phase=20,amount_cents=1000,selection_mode='mandatory'),rule(id='platform',phase=40,threshold_cents=10000,amount_cents=2000)])
+    p=Project(items=[item('a',10500)],rules=[rule(id='shop',phase=20,amount_cents=1000,selection_mode='mandatory'),rule(id='platform',phase=40,threshold_cents=10000,amount_cents=2000,threshold_basis='remaining')])
     assert cost(p).cash_due_cents==9500
 
 
