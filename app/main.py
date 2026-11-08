@@ -74,8 +74,9 @@ async def value_error(request, exc):
 
 @app.get('/', response_class=HTMLResponse)
 async def index():
-    html = (ROOT / 'app/static/index.html').read_text(encoding='utf-8')
-    html = html.replace('</head>', '<script defer src="/static/shopping-entry.js"></script></head>')
+    # 首页直接是新的一键界面：扫码后自动读购物车、出方案，无需手填应付金额。
+    # 旧版“记商品→填应付金额”三步流程仍保留在 /advanced。
+    html = (ROOT / 'app/static/shopping.html').read_text(encoding='utf-8')
     return html.replace('__LOCAL_TOKEN__', TOKEN)
 
 app.mount('/static', StaticFiles(directory=ROOT / 'app/static'), name='static')

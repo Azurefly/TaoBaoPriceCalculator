@@ -298,8 +298,8 @@ def test_read_failure_invalidates_old_snapshot(tmp_path):
 def test_guided_home_includes_new_shopping_entry_without_replacing_demo():
     from app.main import app
     with TestClient(app) as c:
-        assert '/static/shopping-entry.js' in c.get('/').text
-        assert c.get('/static/shopping-entry.js').status_code==200
+        assert '/static/shopping.js' in c.get('/').text
+        assert c.get('/static/shopping.js').status_code==200
 
 
 def test_browser_maps_local_ids_to_original_cart_lines():

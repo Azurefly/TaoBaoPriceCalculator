@@ -80,7 +80,7 @@ def test_demo_is_protected_by_existing_token_middleware():
 def test_simple_and_advanced_routes_keep_token_and_csp():
     c=TestClient(main.app)
     home=c.get('/')
-    assert '/static/simple.js' in home.text
+    assert '/static/shopping.js' in home.text
     assert main.TOKEN in home.text
     assert 'frame-ancestors' in home.headers['content-security-policy']
     advanced=c.get('/advanced')

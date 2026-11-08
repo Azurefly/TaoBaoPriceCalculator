@@ -52,7 +52,7 @@ def service(tmp_path):
 def test_desktop_health_and_rendered_html(service):
     proc, url, token = service
     status, html = request(url)
-    assert status == 200 and token in html and 'PromoPath' in html
+    assert status == 200 and token in html and '开始计算' in html
     info = json.loads(request(url + '/api/desktop/info', token)[1])
     assert info['desktop_version'] == json.loads((ROOT / 'desktop/package.json').read_text())['version']
     assert info['local_only'] is True and info['automatic_payment'] is False
