@@ -130,9 +130,13 @@ class Rule(StrictModel):
             raise ValueError('指定或必选商品不能同时被排除')
         if self.kind == 'repeat_threshold' and not self.threshold_cents:
             raise ValueError('repeat_threshold 必须设置大于0的门槛')
-        # 单品级与个人资产类不参与门槛判定：门槛字段必须为 0，否则规则写错了。
-        if self.layer in ('unit', 'asset') and self.threshold_cents:
-            raise ValueError('单品级/个人资产类优惠不参与门槛判定，门槛必须为 0')
+        # 单品级优惠已经并入单品优惠价（base），不再单独判门槛。
+        if self.layer == 'unit' and self.threshold_cents:
+            raise ValueError('单品级优惠已并入单品优惠价，不单独判门槛；门槛必须为 0')
+        # 个人资产类（红包/淘金币/会员价）确实有使用门槛（如“满500可用”），
+        # 但门槛按所有店铺级/跨店级优惠之后的剩余实付判，不是按标价。
+        if self.layer == 'asset' and self.threshold_cents:
+            self.threshold_basis = 'remaining'
         # 跨店满减没有档位就无法判断能否与其他档位合并；能推则自动补上。
         if self.layer == 'cross' and self.kind in ('repeat_threshold', 'tiered') and not self.band:
             if self.kind == 'repeat_threshold':

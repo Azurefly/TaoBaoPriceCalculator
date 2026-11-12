@@ -249,10 +249,14 @@ def test_extra_fees_are_included_in_cash_total():
 def test_layer_validations_and_implicit_constraints():
     import pytest
     from pydantic import ValidationError
-    # 单品级/个人资产类不允许带门槛
-    for layer in ('unit', 'asset'):
-        with pytest.raises(ValidationError):
-            Rule(id='x', name='x', layer=layer, threshold_cents=100, confirmed=True)
+    # 单品级优惠已并入单品优惠价，不允许再带门槛
+    with pytest.raises(ValidationError):
+        Rule(id='x', name='x', layer='unit', threshold_cents=100, confirmed=True)
+    # 个人资产类（红包/淘金币/会员价）确实有使用门槛，允许带门槛，
+    # 且门槛一律按店铺级/跨店级优惠后的剩余实付判，不是按标价。
+    asset = Rule(id='rp', name='rp', layer='asset', threshold_cents=50000,
+                 amount_cents=1000, confirmed=True)
+    assert asset.threshold_basis == 'remaining'
     # 跨店每满减自动补档位
     band_rule = Rule(id='b', name='b', kind='repeat_threshold', layer='cross',
                      threshold_cents=30000, amount_cents=5000, confirmed=True)

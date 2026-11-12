@@ -38,7 +38,10 @@ def optimize(project: Project, opts: SolveOptions) -> dict:
             reason = '非可移植报价缺少完整的观察时权益余额'
         elif q.valid_until and q.valid_until < opts.starts_at:
             reason = '报价已过期'
-        elif q.captured_at > opts.starts_at:
+        elif q.source in ('checkout', 'manual') and q.captured_at > opts.starts_at:
+            # 只有真实抓取的结账报价才谈得上“抓取时间晚于计划开始时间”。
+            # 规则估算（source='model'）的 captured_at 只是引擎算它的时刻，
+            # 若也按此过滤，任何 starts_at 略早于生成时刻的调用都会被静默判为无解。
             reason = '报价时间在计划开始时间之后，需检查时间设置'
         elif q.source in ('checkout', 'manual') and not opts.replay and (opts.starts_at - q.captured_at).total_seconds() > opts.max_quote_age_seconds:
             reason = '实时报价超过允许缓存时长，需重新核价'
