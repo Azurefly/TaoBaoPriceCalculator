@@ -16,7 +16,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.models import Project, Item, Rule, SolveOptions, utcnow
+from app.models import Project, Item, Rule, ShippingRule, SolveOptions, utcnow
 from app.pricing import simulate_project
 from app.workflow import compare_strategies
 
@@ -100,6 +100,18 @@ def _():
     p, _ = simulate_project(p, 300, None, 6)
     merged = [q for q in p.quotes if set(q.item_ids) >= {'a', 'b'}]
     return min(q.cash_due_cents for q in merged)
+
+
+@case('B6 拆单省券但多付运费，要净算', 2000,
+      '示意图注「假设运费不变」。这里每家店每单30元运费：拆两单省券50、多付运费30 → 净省20')
+def _():
+    p = Project(items=[item('a', 50000), item('b', 50000)],
+                rules=[rule('c50', kind='fixed', threshold_cents=50000, amount_cents=5000)],
+                shipping_rules=[ShippingRule(shop_id='s1', fee_cents=3000,
+                                             free_threshold_cents=None, confirmed=True,
+                                             evidence_note='示意图算例：每家店每单30元')])
+    rows, _, _ = run(p)
+    return rows['merged']['economic_cost_cents'] - rows['optimized']['economic_cost_cents']
 
 
 # ---------------- A. 四层漏斗 ----------------

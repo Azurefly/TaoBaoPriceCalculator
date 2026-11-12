@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 
-from app.models import Project, Item, Rule, SolveOptions, utcnow
+from app.models import Project, Item, Rule, ShippingRule, SolveOptions, utcnow
 from app.pricing import simulate_project
 from app.workflow import compare_strategies
 
@@ -132,3 +132,18 @@ def test_cross_layer_best_of_picks_the_better_one():
 
     assert cash(3000, 5000) == 5000   # 店铺券更优
     assert cash(6000, 5000) == 4000   # 商品券更优
+
+
+def test_splitting_accounts_for_extra_shipping():
+    """示意图注"假设运费不变"：真的变贵时，拆单收益要扣掉多付的运费。"""
+    p = Project(items=[item('a', 50000), item('b', 50000)],
+                rules=[rule('c50', kind='fixed', threshold_cents=50000,
+                            amount_cents=5000)],
+                shipping_rules=[ShippingRule(shop_id='s1', fee_cents=3000,
+                                             free_threshold_cents=None,
+                                             confirmed=True,
+                                             evidence_note='每家店每单30元')])
+    rows = strategies(p)
+    # 拆两单：券省 50、运费多付 30 → 净省 20
+    assert rows['merged']['economic_cost_cents'] == 98000
+    assert rows['optimized']['economic_cost_cents'] == 96000
